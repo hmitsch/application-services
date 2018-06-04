@@ -23,6 +23,10 @@ error_chain! {
             description("Illegal sync status in database")
             display("Illegal sync status in database: {}", v)
         }
+        DuplicateGuid(id: String) {
+            description("Saw duplicate guid")
+            display("Saw duplicate guid {:?}", id)
+        }
     }
 }
 

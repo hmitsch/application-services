@@ -14,6 +14,11 @@ extern crate lazy_static;
 #[macro_use]
 extern crate error_chain;
 
+#[macro_use]
+extern crate more_asserts;
+
+extern crate url;
+
 extern crate rusqlite;
 
 extern crate serde;
@@ -24,11 +29,13 @@ extern crate serde_derive;
 
 mod login;
 mod error;
-mod db;
-mod schema;
 
-pub use error::{Error, ErrorKind, Result};
-pub use login::Login;
+pub mod schema;
+pub mod util;
+pub mod db;
+
+pub use error::*;
+pub use login::*;
 
 
 

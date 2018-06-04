@@ -5,6 +5,8 @@
 use error::*;
 use db;
 
+// Note: care is taken to be compatible with the iOS database format.
+// (It's not clear if this is actually worthwhile though...)
 const VERSION: i64 = 3;
 
 pub static MIRROR_TABLE_NAME: &'static str = "loginsM";
@@ -72,9 +74,9 @@ lazy_static! {
 pub fn init(db: &db::LoginDb) -> Result<()> {
     let user_version = db.query_one::<i64>("PRAGMA user_version")?;
     if user_version == 0 {
-        let table_list_exists = db.query_returns_results(
+        let table_list_exists = db.query_one::<i64>(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tableList'"
-        )?;
+        )? != 0;
 
         if !table_list_exists {
             return create(db);
