@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use rusqlite::{Connection, types::{ToSql, FromSql}, Row, Transaction};
-use std::time::{UNIX_EPOCH, SystemTime};
+use std::time::SystemTime;
 use std::path::Path;
 use std::collections::HashSet;
 use error::*;
@@ -155,7 +155,7 @@ impl LoginDb {
                 chunk
             )?;
             Ok(())
-        });
+        })?;
         // XXX figure out somewhere to write ts!!!!
         Ok(())
     }
@@ -236,53 +236,6 @@ impl LoginDb {
             Ok(())
         })?;
         Ok(sync_data)
-    }
-
-    fn ensure_local_logins_exist(&mut self, ids: &[String]) -> Result<()> {
-        util::each_chunk_mapped(ids, |id| id as &ToSql, |chunk, _| {
-            let sql = format!("
-                WITH
-                    guids_in(guid) AS (VALUES {vals}),
-                    local_missing(guid) AS (
-                        SELECT g.guid
-                        FROM guids_in g
-                        LEFT JOIN {local_table} l
-                          ON l.guid = g.guid
-                        WHERE l.guid IS NULL
-                    ),
-                    mirror_records({common}) AS (
-                        SELECT {common}
-                        FROM {mirror_table}
-                        JOIN local_missing
-                          ON local_missing.guid = {mirror_table}.guid
-                    )
-                INSERT INTO {local_table}({common}, local_modified, is_deleted, sync_status)
-                SELECT
-                    {common},
-                    NULL as local_modified,
-                    0 as is_deleted,
-                    0 as sync_status
-                FROM mirror_records",
-                vals = util::sql_values(chunk.len()),
-                mirror_table = schema::MIRROR_TABLE_NAME,
-                local_table = schema::LOCAL_TABLE_NAME,
-                common = COMMON_COLS,
-            );
-            self.execute_with_args(&sql, chunk)?;
-            Ok(())
-        })?;
-        Ok(())
-    }
-
-    fn mark_mirror_overridden(&mut self, ids: &[String]) -> Result<()> {
-        util::each_chunk_mapped(ids, |id| id as &ToSql, |chunk, _| {
-            let sql = format!("UPDATE {mirror} SET is_overridden = 1 WHERE guid IN ({vars})",
-                              vars = util::sql_vars(chunk.len()),
-                              mirror = schema::MIRROR_TABLE_NAME);
-            self.execute_with_args(&sql, chunk)?;
-            Ok(())
-        })?;
-        Ok(())
     }
 
     // It would be nice if this were a batch-ish api (e.g. takes a slice of records and finds dupes
@@ -537,7 +490,7 @@ impl LoginDb {
                 }
                 (Some(_mirror), None) => {
                     debug!("  Forwarding mirror to remote");
-                    plan.mirror_updates.push((upstream, upstream_time.as_millis() as i64));
+                    plan.plan_mirror_update(upstream, upstream_time);
                 }
                 (None, Some(local)) => {
                     debug!("  Conflicting record without shared parent, using newer");
@@ -549,7 +502,7 @@ impl LoginDb {
                         plan.plan_two_way_merge(&dupe, (upstream, upstream_time));
                     } else {
                         debug!("  No dupe found, inserting into mirror");
-                        plan.mirror_inserts.push((upstream, upstream_time.as_millis() as i64, false));
+                        plan.plan_mirror_insert(upstream, upstream_time, false);
                     }
                 }
             }
@@ -574,12 +527,10 @@ impl LoginDb {
         ))?;
         let rows = stmt.query_and_then(&[], |row| {
             // XXX OutgoingChangeset should no longer have timestamp.
-            let modified = util::system_time_from_row(row, "local_modified").unwrap_or(UNIX_EPOCH);
             Ok(if row.get::<_, bool>("is_deleted") {
-                (Payload::new_tombstone(row.get_checked::<_, String>("guid")?.into()), modified)
+                Payload::new_tombstone(row.get_checked::<_, String>("guid")?)
             } else {
-                let login = Login::from_row(row)?;
-                (Payload::from_record(login)?, modified)
+                Payload::from_record(Login::from_row(row)?)?
             })
         })?;
         outgoing.changes = rows.collect::<Result<_>>()?;

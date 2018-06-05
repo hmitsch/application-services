@@ -48,14 +48,6 @@ fn string_or_default(row: &Row, col: &str) -> Result<String> {
     Ok(row.get_checked::<_, Option<String>>(col)?.unwrap_or_default())
 }
 
-#[inline]
-fn is_empty_string(o: &Option<String>) -> bool {
-    match o {
-        Some(v) => v.is_empty(),
-        _ => true
-    }
-}
-
 impl Login {
     #[inline]
     pub fn guid(&self) -> &String {
