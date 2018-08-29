@@ -18,19 +18,49 @@ pub struct LoginDb {
     db: Connection,
 }
 
+// In PRAGMA foo='bar', `'bar'` must be a constant string (it cannot be a
+// bound parameter), so we need to escape manually. According to
+// https://www.sqlite.org/faq.html, the only character that must be escaped is
+// the single quote, which is escaped by placing two single quotes in a row.
+fn escape_string_for_pragma(s: &str) -> String {
+    s.replace("'", "''")
+}
+
 impl LoginDb {
-    pub fn with_connection(db: Connection) -> Result<Self> {
+    pub fn with_connection(db: Connection, encryption_key: Option<&str>) -> Result<Self> {
+        let encryption_pragmas = if let Some(key) = encryption_key {
+            // TODO: We probably should support providing a key that doesn't go
+            // through PBKDF2 (e.g. pass it in as hex, or use sqlite3_key
+            // directly. See https://www.zetetic.net/sqlcipher/sqlcipher-api/#key
+            // "Raw Key Data" example. Note that this would be required to open
+            // existing iOS sqlcipher databases).
+            format!("PRAGMA key = '{}';", escape_string_for_pragma(key))
+        } else {
+            "".to_owned()
+        };
+
+        // `temp_store = 2` is required on Android to force the DB to keep temp
+        // files in memory, since on Android there's no tmp partition. See
+        // https://github.com/mozilla/mentat/issues/505. Ideally we'd only
+        // do this on Android, or allow caller to configure it.
+        let initial_pragmas = format!("
+            {}
+            PRAGMA temp_store = 2;
+        ", encryption_pragmas);
+
+        db.execute_batch(&initial_pragmas)?;
+
         let mut res = Self { db };
         schema::init(&mut res)?;
         Ok(res)
     }
 
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self::with_connection(Connection::open(path)?)?)
+    pub fn open(path: impl AsRef<Path>, encryption_key: Option<&str>) -> Result<Self> {
+        Ok(Self::with_connection(Connection::open(path)?, encryption_key)?)
     }
 
-    pub fn open_in_memory() -> Result<Self> {
-        Ok(Self::with_connection(Connection::open_in_memory()?)?)
+    pub fn open_in_memory(encryption_key: Option<&str>) -> Result<Self> {
+        Ok(Self::with_connection(Connection::open_in_memory()?, encryption_key)?)
     }
 
     pub fn vacuum(&self) -> Result<()> {
@@ -169,7 +199,7 @@ impl LoginDb {
             let mut seen_ids: HashSet<String> = HashSet::with_capacity(records.len());
             for incoming in records.iter() {
                 if seen_ids.contains(&incoming.0.id) {
-                    bail!(ErrorKind::DuplicateGuid(incoming.0.id.to_string()))
+                    throw!(ErrorKind::DuplicateGuid(incoming.0.id.to_string()))
                 }
                 seen_ids.insert(incoming.0.id.clone());
                 sync_data.push(SyncLoginData::from_payload(incoming.0.clone(), incoming.1)?);
@@ -550,29 +580,24 @@ impl LoginDb {
 }
 
 impl Store for LoginDb {
+    type Error = Error;
 
     fn apply_incoming(
         &mut self,
         inbound: IncomingChangeset
-    ) -> sync::Result<OutgoingChangeset> {
-        self.do_apply_incoming(inbound).map_err(|e| {
-            let msg = format!("Storage error: {}", e);
-            sync::Error::with_chain(e, sync::ErrorKind::UnexpectedError(msg))
-        })
+    ) -> Result<OutgoingChangeset> {
+        self.do_apply_incoming(inbound)
     }
 
     fn sync_finished(
         &mut self,
         new_timestamp: ServerTimestamp,
         records_synced: &[String],
-    ) -> sync::Result<()> {
+    ) -> Result<()> {
         self.mark_as_synchronized(
             &records_synced.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
             new_timestamp
-        ).map_err(|e| {
-            let msg = format!("Storage error: {}", e);
-            sync::Error::with_chain(e, sync::ErrorKind::UnexpectedError(msg))
-        })
+        )
     }
 }
 

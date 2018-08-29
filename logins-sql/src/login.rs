@@ -61,19 +61,19 @@ impl Login {
 
     pub fn check_valid(&self) -> Result<()> {
         if self.hostname.is_empty() {
-            bail!(ErrorKind::InvalidLogin("Can't add a login with an empty hostname."));
+            throw!(InvalidLogin::EmptyHostname);
         }
 
         if self.password.is_empty() {
-            bail!(ErrorKind::InvalidLogin("Can't add a login with an empty password."));
+            throw!(InvalidLogin::EmptyPassword);
         }
 
         if self.form_submit_url.is_some() && self.http_realm.is_some() {
-            bail!(ErrorKind::InvalidLogin("Can't add a login with both a httpRealm and formSubmitURL."));
+            throw!(InvalidLogin::BothTargets);
         }
 
         if self.form_submit_url.is_none() && self.http_realm.is_none() {
-            bail!(ErrorKind::InvalidLogin("Can't add a login without a httpRealm or formSubmitURL."));
+            throw!(InvalidLogin::NoTarget);
         }
         Ok(())
     }
@@ -140,7 +140,7 @@ impl SyncStatus {
             0 => Ok(SyncStatus::Synced),
             1 => Ok(SyncStatus::Changed),
             2 => Ok(SyncStatus::New),
-            v => bail!(ErrorKind::BadSyncStatus(v)),
+            v => throw!(ErrorKind::BadSyncStatus(v)),
         }
     }
 }
@@ -245,18 +245,20 @@ macro_rules! impl_login_setter {
     ($setter_name:ident, $field:ident, $Login:ty) => {
         impl SyncLoginData {
             pub(crate) fn $setter_name (&mut self, record: $Login) -> Result<()> {
+                // TODO: We probably shouldn't panic in this function!
                 if self.$field.is_some() {
                     // Shouldn't be possible (only could happen if UNIQUE fails in sqlite, or if we
-                    // get duplicate guids somewhere, but we check).
-                    bail!("SyncLoginData::{} called on object that already has {} data",
-                          stringify!($setter_name),
-                          stringify!($field));
+                    // get duplicate guids somewhere,but we check).
+                    panic!("SyncLoginData::{} called on object that already has {} data",
+                           stringify!($setter_name),
+                           stringify!($field));
                 }
 
                 if self.guid_str() != record.guid_str() {
                     // This is almost certainly a bug in our code.
-                    bail!("Wrong guid on login in {}: {:?} != {:?}",
-                          stringify!($setter_name), self.guid_str(), record.guid_str());
+                    panic!("Wrong guid on login in {}: {:?} != {:?}",
+                           stringify!($setter_name),
+                           self.guid_str(), record.guid_str());
                 }
 
                 self.$field = Some(record);

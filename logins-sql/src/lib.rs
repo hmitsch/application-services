@@ -1,7 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#![recursion_limit = "1024"]
 
 extern crate sync15_adapter as sync;
 
@@ -11,8 +10,10 @@ extern crate log;
 #[macro_use]
 extern crate lazy_static;
 
+extern crate failure;
+
 #[macro_use]
-extern crate error_chain;
+extern crate failure_derive;
 
 #[macro_use]
 extern crate more_asserts;
@@ -27,8 +28,9 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-mod login;
+#[macro_use]
 mod error;
+mod login;
 
 pub mod schema;
 pub mod util;
