@@ -1,5 +1,5 @@
 [package]
-name = "sync-pw-sql-store"
+name = "logins-sql"
 version = "0.1.0"
 authors = ["Thom Chiovoloni <tchiovoloni@mozilla.com>"]
 
