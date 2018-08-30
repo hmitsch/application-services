@@ -198,7 +198,7 @@ impl LimitTracker {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InfoConfiguration {
     /// The maximum size in bytes of the overall HTTP request body that will be accepted by the
     /// server.
@@ -247,7 +247,7 @@ impl Default for InfoConfiguration {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct InfoCollections(HashMap<String, ServerTimestamp>);
 
 impl InfoCollections {

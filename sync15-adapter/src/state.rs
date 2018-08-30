@@ -12,6 +12,7 @@ use key_bundle::KeyBundle;
 use record_types::{MetaGlobalEngine, MetaGlobalRecord};
 use request::{InfoCollections, InfoConfiguration};
 use util::{random_guid, ServerTimestamp, SERVER_EPOCH};
+use serde_json;
 
 use self::SetupState::*;
 
@@ -39,10 +40,16 @@ lazy_static! {
     static ref DEFAULT_DECLINED: Vec<&'static str> = vec![];
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "schema_version")]
+enum PersistedState {
+    V1(GlobalState),
+}
+
 /// Holds global Sync state, including server upload limits, and the
 /// last-fetched collection modified times, `meta/global` record, and
 /// collection encryption keys.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalState {
     pub config: InfoConfiguration,
     pub collections: InfoCollections,
@@ -52,6 +59,18 @@ pub struct GlobalState {
 }
 
 impl GlobalState {
+    pub fn to_persistable_string(&self) -> String {
+        let state = PersistedState::V1(self.clone());
+        serde_json::to_string(&state)
+            .expect("Should only fail for recursive types (this is not recursive)")
+    }
+
+    pub fn from_persisted_string(data: &str) -> error::Result<Self> {
+        match serde_json::from_str(data)? {
+            PersistedState::V1(global_state) => Ok(global_state)
+        }
+    }
+
     pub fn key_for_collection(&self, collection: &str) -> error::Result<&KeyBundle> {
         Ok(self.keys
             .as_ref()
@@ -590,7 +609,7 @@ impl FetchAction {
 }
 
 /// Flags an engine for enablement or disablement.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum EngineStateChange {
     ResetAll,
     ResetAllExcept(HashSet<String>),
