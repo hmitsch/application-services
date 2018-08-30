@@ -34,6 +34,7 @@ pub struct Login {
     #[serde(default)]
     pub password_field: String,
 
+    // Next three fields are in microseconds!
     pub time_created: i64,
     pub time_password_changed: i64,
 
@@ -164,7 +165,7 @@ impl LocalLogin {
             login: Login::from_row(row)?,
             sync_status: SyncStatus::from_u8(row.get_checked("sync_status")?)?,
             is_deleted: row.get_checked("is_deleted")?,
-            local_modified:  util::system_time_from_row(row, "local_modified")?
+            local_modified: util::system_time_millis_from_row(row, "local_modified")?
         })
     }
 }

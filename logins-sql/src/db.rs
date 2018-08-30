@@ -186,7 +186,7 @@ impl LoginDb {
             )?;
             Ok(())
         })?;
-        // XXX figure out somewhere to write ts!!!!
+        self.set_last_sync(ts)?;
         Ok(())
     }
 
@@ -294,6 +294,88 @@ impl LoginDb {
             query += " AND formSubmitURL IS ?"
         }
         Ok(self.query_row(&query, &args, |row| Login::from_row(row))?)
+    }
+
+    pub fn get_all(&self) -> Result<Vec<Login>> {
+        let mut stmt = self.db.prepare_cached(&GET_ALL_SQL)?;
+        let rows = stmt.query_and_then(&[], Login::from_row)?;
+        rows.collect::<Result<_>>()
+    }
+
+    pub fn get_by_id(&self, id: &str) -> Result<Option<Login>> {
+        self.query_row_cached(&GET_BY_ID_SQL, &[&id as &ToSql], Login::from_row)
+    }
+
+    pub fn touch(&self, id: &str) -> Result<()> {
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_ms = now_us / 1000;
+        let sql = format!("
+            UPDATE {local}
+               SET timeLastUsed = ?
+                   timesUsed = timesUsed + 1,
+                   local_modified = ?
+               WHERE guid = ?
+                 AND is_deleted = 0
+        ", local = schema::LOCAL_TABLE_NAME);
+        self.execute_cached_with_args(&sql,
+            &[&now_us as &ToSql, &now_ms as &ToSql, &id as &ToSql])?;
+        Ok(())
+    }
+
+    pub fn exists(&self, id: &str) -> Result<bool> {
+        let res: i64 = self.query_row_cached(
+            &*ID_EXISTS_SQL, &[&id as &ToSql], |row| Ok(row.get(0)))?.unwrap_or_default();
+        Ok(res != 0)
+    }
+
+    /// Delete the record with the provided id. Returns true if the record
+    /// existed already.
+    pub fn delete(&self, id: &str) -> Result<bool> {
+        let exists = self.exists(id)?;
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_ms = now_us / 1000;
+
+        // Directly delete IDs that have not yet been synced to the server
+        self.db.execute(&format!("
+            DELETE FROM {local}
+            WHERE guid = ?
+              AND sync_status = {status_new}",
+            local = schema::LOCAL_TABLE_NAME,
+            status_new = SyncStatus::New as u8), &[])?;
+
+        // For IDs that have, mark is_deleted and clear sensitive fields
+        self.db.execute(&format!("
+            UPDATE {local}
+            SET local_modified = ?,
+                sync_status = {status_changed},
+                is_deleted = 1,
+                password = '',
+                hostname = '',
+                username = ''
+            WHERE guid = ?",
+            local = schema::LOCAL_TABLE_NAME,
+            status_changed = SyncStatus::Changed as u8),
+            &[&now_ms as &ToSql])?;
+
+        // Mark the mirror as overridden
+        self.db.execute(&format!("UPDATE {mirror} SET is_overridden = 1 WHERE guid = ?",
+                                 mirror = schema::MIRROR_TABLE_NAME),
+                        &[&now_ms as &ToSql])?;
+
+        // If we don't have a local record for this ID, but do have it in the mirror
+        // insert a tombstone.
+        self.db.execute(&format!("
+            INSERT OR IGNORE INTO {local}
+                    (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
+            SELECT   guid, ?,              1,          {changed},   '',       timeCreated, ?,                   '',       ''
+            FROM {mirror}
+            WHERE  guid = ?",
+            local = schema::LOCAL_TABLE_NAME,
+            mirror = schema::MIRROR_TABLE_NAME,
+            changed = SyncStatus::Changed as u8),
+            &[&now_ms as &ToSql, &now_us as &ToSql])?;
+
+        Ok(exists)
     }
 
 }
@@ -577,6 +659,30 @@ impl LoginDb {
         self.execute_plan(plan)?;
         Ok(self.fetch_outgoing(inbound.timestamp)?)
     }
+
+    fn put_meta(&self, key: &str, value: &ToSql) -> Result<()> {
+        self.execute_cached_with_args(&*META_PUT_SQL, &[&key as &ToSql, value])
+    }
+
+    fn get_meta<T: FromSql>(&self, key: &str) -> Result<Option<T>> {
+        self.query_row_cached(&*META_GET_SQL, &[&key as &ToSql], |row| Ok(row.get(0)))
+    }
+
+    pub fn set_last_sync(&self, last_sync: ServerTimestamp) -> Result<()> {
+        self.put_meta(schema::LAST_SYNC_META_KEY, &last_sync.0)
+    }
+
+    pub fn set_global_state(&self, global_state: &str) -> Result<()> {
+        self.put_meta(schema::GLOBAL_STATE_META_KEY, &global_state)
+    }
+
+    pub fn get_last_sync(&self) -> Result<Option<ServerTimestamp>> {
+        Ok(self.get_meta::<f64>(schema::LAST_SYNC_META_KEY)?.map(ServerTimestamp))
+    }
+
+    pub fn get_global_state(&self) -> Result<Option<String>> {
+        self.get_meta::<String>(schema::GLOBAL_STATE_META_KEY)
+    }
 }
 
 impl Store for LoginDb {
@@ -621,5 +727,35 @@ lazy_static! {
         local = schema::LOCAL_TABLE_NAME,
         new = SyncStatus::New as u8
     );
+
+    static ref META_GET_SQL: String = format!(
+        "SELECT value FROM {meta_table} WHERE key = ?",
+        meta_table = schema::META_TABLE_NAME
+    );
+
+    static ref META_PUT_SQL: String = format!(
+        "REPLACE INTO {meta_table} (key, value) VALUES (?, ?)",
+        meta_table = schema::META_TABLE_NAME
+    );
+
+    static ref GET_ALL_SQL: String = format!(
+        "SELECT {common_cols} FROM {local} WHERE is_deleted = 0",
+        common_cols = COMMON_COLS,
+        local = schema::LOCAL_TABLE_NAME
+    );
+
+    static ref GET_BY_ID_SQL: String = format!(
+        "SELECT {common_cols} FROM {local} WHERE guid = ?",
+        common_cols = COMMON_COLS,
+        local = schema::LOCAL_TABLE_NAME
+    );
+
+    static ref ID_EXISTS_SQL: String = format!("
+        SELECT EXISTS(
+            SELECT 1 FROM {local}
+            WHERE guid = ?
+            AND is_deleted = 0
+        )
+    ", local = schema::LOCAL_TABLE_NAME);
 
 }

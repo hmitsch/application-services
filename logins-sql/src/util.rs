@@ -80,17 +80,30 @@ pub fn url_host_port(url_str: &str) -> Option<String> {
     })
 }
 
-pub fn system_time_from_row(row: &Row, col_name: &str) -> Result<time::SystemTime> {
+pub fn system_time_millis_from_row(row: &Row, col_name: &str) -> Result<time::SystemTime> {
     let time_ms = row.get_checked::<_, i64>(col_name)? as u64;
     Ok(time::UNIX_EPOCH + time::Duration::from_millis(time_ms))
 }
 
+pub fn system_time_micros_from_row(row: &Row, col_name: &str) -> Result<time::SystemTime> {
+    let time_us = row.get_checked::<_, i64>(col_name)? as u64;
+    Ok(time::UNIX_EPOCH + time::Duration::from_micros(time_us))
+}
+
 pub fn duration_ms_i64(d: time::Duration) -> i64 {
-    (d.as_secs() as i64) * 1000 + ((d.subsec_nanos() as i64) * 1_000_000)
+    (d.as_secs() as i64) * 1000 + ((d.subsec_nanos() as i64) / 1_000_000)
 }
 
 pub fn system_time_ms_i64(t: time::SystemTime) -> i64 {
     duration_ms_i64(t.duration_since(time::UNIX_EPOCH).unwrap_or_default())
+}
+
+pub fn duration_us_i64(d: time::Duration) -> i64 {
+    (d.as_secs() as i64) * 1000000 + ((d.subsec_nanos() as i64) / 1_000)
+}
+
+pub fn system_time_us_i64(t: time::SystemTime) -> i64 {
+    duration_us_i64(t.duration_since(time::UNIX_EPOCH).unwrap_or_default())
 }
 
 #[cfg(test)]

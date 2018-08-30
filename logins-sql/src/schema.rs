@@ -7,10 +7,11 @@ use db;
 
 // Note: care is taken to be compatible with the iOS database format.
 // (It's not clear if this is actually worthwhile though...)
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 pub static MIRROR_TABLE_NAME: &'static str = "loginsM";
 pub static LOCAL_TABLE_NAME: &'static str = "loginsL";
+pub static META_TABLE_NAME: &'static str = "loginsSyncMeta";
 
 static IDX_OVERRIDE_HOSTNAME: &'static str = "idx_loginsM_is_overridden_hostname";
 static IDX_DELETED_HOSTNAME: &'static str = "idx_loginsL_is_deleted_hostname";
@@ -23,8 +24,11 @@ static COMMON_SQL: &'static str = "
     usernameField       TEXT,
     passwordField       TEXT,
     timesUsed           INTEGER NOT NULL DEFAULT 0,
+    -- Microseconds
     timeCreated         INTEGER NOT NULL,
+    -- Microseconds
     timeLastUsed        INTEGER,
+    -- Microseconds
     timePasswordChanged INTEGER NOT NULL,
     username            TEXT,
     password            TEXT NOT NULL,
@@ -35,7 +39,9 @@ lazy_static! {
     pub static ref CREATE_LOCAL_TABLE_SQL: String = format!(
         "CREATE TABLE IF NOT EXISTS {} (
             {},
+            -- Milliseconds
             local_modified INTEGER,
+
             is_deleted     TINYINT NOT NULL DEFAULT 0,
             sync_status    TINYINT NOT NULL DEFAULT 0
         )",
@@ -53,6 +59,13 @@ lazy_static! {
         COMMON_SQL
     );
 
+    pub static ref CREATE_META_TABLE: String = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+            key TEXT PRIMARY KEY,
+            value NOT NULL
+        )",
+        META_TABLE_NAME,
+    );
 
     pub static ref CREATE_OVERRIDE_HOSTNAME_INDEX_SQL: String = format!(
         "CREATE INDEX IF NOT EXISTS {} ON {} (is_overridden, hostname)",
@@ -70,6 +83,9 @@ lazy_static! {
         VERSION
     );
 }
+
+pub(crate) static LAST_SYNC_META_KEY:    &'static str = "last_sync_time";
+pub(crate) static GLOBAL_STATE_META_KEY: &'static str = "global_state";
 
 pub fn init(db: &db::LoginDb) -> Result<()> {
     let user_version = db.query_one::<i64>("PRAGMA user_version")?;
@@ -90,9 +106,8 @@ pub fn init(db: &db::LoginDb) -> Result<()> {
 
 // https://github.com/mozilla-mobile/firefox-ios/blob/master/Storage/SQL/LoginsSchema.swift#L100
 fn upgrade(db: &db::LoginDb, from: i64) -> Result<()> {
-    let to = VERSION;
-    debug!("Upgrading schema from {} to {}", from, to);
-    if from == to {
+    debug!("Upgrading schema from {} to {}", from, VERSION);
+    if from == VERSION {
         return Ok(());
     }
     if from == 0 {
@@ -100,11 +115,19 @@ fn upgrade(db: &db::LoginDb, from: i64) -> Result<()> {
         create(db)?;
         return Ok(());
     }
-    if from < 3 && to >= 3 {
-        // Added in version 3 apparently?
+    if from < 3 {
+        // These indices were added in v3 (apparently)
         db.execute_all(&[
             &*CREATE_OVERRIDE_HOSTNAME_INDEX_SQL,
             &*CREATE_DELETED_HOSTNAME_INDEX_SQL,
+            &*CREATE_META_TABLE,
+            &*SET_VERSION_SQL,
+        ])?;
+    }
+    if from < 4 {
+        // The `loginsSyncMeta` table was added in v4
+        db.execute_all(&[
+            &*CREATE_META_TABLE,
             &*SET_VERSION_SQL,
         ])?;
     }
