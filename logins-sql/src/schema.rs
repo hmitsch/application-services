@@ -9,14 +9,30 @@ use db;
 // (It's not clear if this is actually worthwhile though...)
 const VERSION: i64 = 4;
 
-pub static MIRROR_TABLE_NAME: &'static str = "loginsM";
-pub static LOCAL_TABLE_NAME: &'static str = "loginsL";
-pub static META_TABLE_NAME: &'static str = "loginsSyncMeta";
+pub const MIRROR_TABLE_NAME: &'static str = "loginsM";
+pub const LOCAL_TABLE_NAME: &'static str = "loginsL";
+pub const META_TABLE_NAME: &'static str = "loginsSyncMeta";
 
-static IDX_OVERRIDE_HOSTNAME: &'static str = "idx_loginsM_is_overridden_hostname";
-static IDX_DELETED_HOSTNAME: &'static str = "idx_loginsL_is_deleted_hostname";
+const IDX_MIRROR_OVERRIDEN_HOSTNAME: &'static str = "idx_loginsM_is_overridden_hostname";
+const IDX_LOCAL_DELETED_HOSTNAME: &'static str = "idx_loginsL_is_deleted_hostname";
 
-static COMMON_SQL: &'static str = "
+// Every column shared by both tables except for `id`
+pub const COMMON_COLS: &'static str = "
+    guid,
+    username,
+    password,
+    hostname,
+    httpRealm,
+    formSubmitURL,
+    usernameField,
+    passwordField,
+    timeCreated,
+    timeLastUsed,
+    timePasswordChanged,
+    timesUsed
+";
+
+const COMMON_SQL: &'static str = "
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     hostname            TEXT NOT NULL,
     httpRealm           TEXT,
@@ -35,52 +51,55 @@ static COMMON_SQL: &'static str = "
     guid                TEXT NOT NULL UNIQUE
 ";
 
+
+
 lazy_static! {
-    pub static ref CREATE_LOCAL_TABLE_SQL: String = format!(
-        "CREATE TABLE IF NOT EXISTS {} (
-            {},
+    static ref CREATE_LOCAL_TABLE_SQL: String = format!(
+        "CREATE TABLE IF NOT EXISTS {local} (
+            {common_sql},
             -- Milliseconds
             local_modified INTEGER,
 
             is_deleted     TINYINT NOT NULL DEFAULT 0,
             sync_status    TINYINT NOT NULL DEFAULT 0
         )",
-        LOCAL_TABLE_NAME,
-        COMMON_SQL
+        local      = LOCAL_TABLE_NAME,
+        common_sql = COMMON_SQL
     );
 
-    pub static ref CREATE_MIRROR_TABLE_SQL: String = format!(
-        "CREATE TABLE IF NOT EXISTS {} (
-            {},
+    static ref CREATE_MIRROR_TABLE_SQL: String = format!(
+        "CREATE TABLE IF NOT EXISTS {mirror} (
+            {common_sql},
             server_modified INTEGER NOT NULL,
             is_overridden   TINYINT NOT NULL DEFAULT 0
         )",
-        MIRROR_TABLE_NAME,
-        COMMON_SQL
+        mirror     = MIRROR_TABLE_NAME,
+        common_sql = COMMON_SQL
     );
 
-    pub static ref CREATE_META_TABLE: String = format!(
-        "CREATE TABLE IF NOT EXISTS {} (
+    static ref CREATE_META_TABLE_SQL: String = format!(
+        "CREATE TABLE IF NOT EXISTS {meta} (
             key TEXT PRIMARY KEY,
             value NOT NULL
         )",
-        META_TABLE_NAME,
+        meta = META_TABLE_NAME,
     );
 
-    pub static ref CREATE_OVERRIDE_HOSTNAME_INDEX_SQL: String = format!(
-        "CREATE INDEX IF NOT EXISTS {} ON {} (is_overridden, hostname)",
-        IDX_OVERRIDE_HOSTNAME,
-        MIRROR_TABLE_NAME
+    static ref CREATE_OVERRIDE_HOSTNAME_INDEX_SQL: String = format!(
+        "CREATE INDEX IF NOT EXISTS {idx_override_hostname} ON {mirror} (is_overridden, hostname)",
+        idx_override_hostname = IDX_MIRROR_OVERRIDEN_HOSTNAME,
+        mirror = MIRROR_TABLE_NAME
     );
 
-    pub static ref CREATE_DELETED_HOSTNAME_INDEX_SQL: String = format!(
-        "CREATE INDEX IF NOT EXISTS {} ON {} (is_deleted, hostname)",
-        IDX_DELETED_HOSTNAME,
-        MIRROR_TABLE_NAME
+    static ref CREATE_DELETED_HOSTNAME_INDEX_SQL: String = format!(
+        "CREATE INDEX IF NOT EXISTS {idx_local_deleted_hostname} ON {local} (is_deleted, hostname)",
+        idx_local_deleted_hostname = IDX_LOCAL_DELETED_HOSTNAME,
+        local = LOCAL_TABLE_NAME
     );
-    pub static ref SET_VERSION_SQL: String = format!(
-        "PRAGMA user_version = {}",
-        VERSION
+
+    static ref SET_VERSION_SQL: String = format!(
+        "PRAGMA user_version = {version}",
+        version = VERSION
     );
 }
 
@@ -99,7 +118,13 @@ pub fn init(db: &db::LoginDb) -> Result<()> {
         }
     }
     if user_version != VERSION {
-        upgrade(db, user_version)?;
+        if user_version < VERSION {
+            upgrade(db, user_version)?;
+        } else {
+            warn!("Loaded future schema version {} (we only understand version {}). \
+                   Optimisitically ",
+                  user_version, VERSION)
+        }
     }
     Ok(())
 }
@@ -120,14 +145,12 @@ fn upgrade(db: &db::LoginDb, from: i64) -> Result<()> {
         db.execute_all(&[
             &*CREATE_OVERRIDE_HOSTNAME_INDEX_SQL,
             &*CREATE_DELETED_HOSTNAME_INDEX_SQL,
-            &*CREATE_META_TABLE,
-            &*SET_VERSION_SQL,
         ])?;
     }
     if from < 4 {
         // The `loginsSyncMeta` table was added in v4
         db.execute_all(&[
-            &*CREATE_META_TABLE,
+            &*CREATE_META_TABLE_SQL,
             &*SET_VERSION_SQL,
         ])?;
     }

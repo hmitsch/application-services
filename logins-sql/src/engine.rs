@@ -52,7 +52,17 @@ impl PasswordEngine {
         self.db.delete(id)
     }
 
-    // TODO: wipe, reset, add, update
+    pub fn wipe(&self) -> Result<()> {
+        self.db.wipe()
+    }
+
+    pub fn update(&self, login: Login) -> Result<()> {
+        self.db.update(login)
+    }
+
+    pub fn add(&self, login: Login) -> Result<()> {
+        self.db.add(login)
+    }
 
     pub fn sync(
         &mut self,

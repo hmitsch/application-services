@@ -68,34 +68,34 @@ impl LoginDb {
         Ok(())
     }
 
-    pub fn execute_all(&self, stmts: &[impl AsRef<str>]) -> Result<()> {
+    pub fn execute_all(&self, stmts: &[&str]) -> Result<()> {
         for sql in stmts {
-            self.execute(sql.as_ref())?;
+            self.execute(sql)?;
         }
         Ok(())
     }
 
     #[inline]
-    pub fn execute(&self, stmt: impl AsRef<str>) -> Result<()> {
+    pub fn execute(&self, stmt: impl AsRef<str>) -> Result<usize> {
         Ok(self.do_exec(stmt.as_ref(), &[], false)?)
     }
 
     #[inline]
-    pub fn execute_cached(&self, stmt: impl AsRef<str>) -> Result<()> {
+    pub fn execute_cached(&self, stmt: impl AsRef<str>) -> Result<usize> {
         Ok(self.do_exec(stmt.as_ref(), &[], true)?)
     }
 
     #[inline]
-    pub fn execute_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<()> {
+    pub fn execute_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<usize> {
         Ok(self.do_exec(stmt.as_ref(), params, false)?)
     }
 
     #[inline]
-    pub fn execute_cached_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<()> {
+    pub fn execute_cached_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<usize> {
         Ok(self.do_exec(stmt.as_ref(), params, true)?)
     }
 
-    fn do_exec(&self, sql: &str, params: &[&ToSql], cache: bool) -> Result<()> {
+    fn do_exec(&self, sql: &str, params: &[&ToSql], cache: bool) -> Result<usize> {
         let res = if cache {
             self.db.prepare_cached(sql)
                    .and_then(|mut s| s.execute(params))
@@ -105,8 +105,7 @@ impl LoginDb {
         if let Err(e) = &res {
             warn!("Error running SQL {}. Statement: {:?}", e, sql);
         }
-        res?;
-        Ok(())
+        Ok(res?)
     }
 
     pub fn query_one<T: FromSql>(&self, sql: &str) -> Result<T> {
@@ -143,6 +142,15 @@ impl LoginDb {
             None => Ok(None),
         }
     }
+
+    fn mark_mirror_overridden(&self, guid: &str) -> Result<()> {
+        self.execute_cached_with_args("
+            UPDATE loginsM SET
+            is_overridden = 1
+            WHERE guid = ?
+        ", &[&guid as &ToSql])?;
+        Ok(())
+    }
 }
 
 // login specific stuff.
@@ -170,7 +178,7 @@ impl LoginDb {
                     SELECT {common_cols}, 0, {modified_ms_i64}
                     FROM {local_table}
                     WHERE guid IN ({vars})",
-                    common_cols = COMMON_COLS,
+                    common_cols = schema::COMMON_COLS,
                     mirror_table = schema::MIRROR_TABLE_NAME,
                     local_table = schema::LOCAL_TABLE_NAME,
                     modified_ms_i64 = ts.as_millis() as i64,
@@ -242,7 +250,7 @@ impl LoginDb {
                 vals = values_with_idx,
                 local_table = schema::LOCAL_TABLE_NAME,
                 mirror_table = schema::MIRROR_TABLE_NAME,
-                common_cols = COMMON_COLS
+                common_cols = schema::COMMON_COLS
             );
 
             let mut stmt = self.db.prepare(&query)?;
@@ -284,7 +292,7 @@ impl LoginDb {
             WHERE hostname IS ?
               AND httpRealm IS ?
               AND username IS ?",
-            common = COMMON_COLS,
+            common = schema::COMMON_COLS,
             local_table = schema::LOCAL_TABLE_NAME,
         );
         if form_submit_host_port.is_some() {
@@ -303,29 +311,142 @@ impl LoginDb {
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Login>> {
-        self.query_row_cached(&GET_BY_ID_SQL, &[&id as &ToSql], Login::from_row)
+        self.query_row_cached(&GET_BY_GUID_SQL, &[
+            &id as &ToSql,
+            &id as &ToSql,
+        ], Login::from_row)
     }
 
     pub fn touch(&self, id: &str) -> Result<()> {
+        self.ensure_local_overlay_exists(id)?;
+        self.mark_mirror_overridden(id)?;
         let now_us = util::system_time_us_i64(SystemTime::now());
         let now_ms = now_us / 1000;
-        let sql = format!("
-            UPDATE {local}
-               SET timeLastUsed = ?
+        // As on iOS, just using a record doesn't flip it's status to changed.
+        // TODO: this might be wrong for lockbox!
+        self.execute_cached_with_args("
+            UPDATE loginsL
+               SET timeLastUsed = ?,
                    timesUsed = timesUsed + 1,
                    local_modified = ?
                WHERE guid = ?
-                 AND is_deleted = 0
-        ", local = schema::LOCAL_TABLE_NAME);
-        self.execute_cached_with_args(&sql,
-            &[&now_us as &ToSql, &now_ms as &ToSql, &id as &ToSql])?;
+                 AND is_deleted = 0",
+            &[&now_us as &ToSql, &now_ms as &ToSql, &id as &ToSql]
+        )?;
+        Ok(())
+    }
+
+    pub fn add(&self, login: Login) -> Result<()> {
+        login.check_valid()?;
+
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_ms = now_us / 1000;
+
+        let sql = format!("
+            INSERT OR IGNORE INTO loginsL (
+                hostname,
+                httpRealm,
+                formSubmitURL,
+                usernameField,
+                passwordField,
+                timesUsed,
+                username,
+                password,
+                guid,
+                timeCreated,
+                timeLastUsed,
+                timePasswordChanged,
+                local_modified,
+                is_deleted,
+                sync_status
+            ) VALUES (
+                :hostname,
+                :http_realm,
+                :form_submit_url,
+                :username_field,
+                :password_field,
+                1, // timesUsed
+                :username,
+                :password,
+                :guid,
+                :time_created,
+                :time_last_used,
+                :time_password_changed,
+                :local_modified,
+                0, // isDeleted
+                {new} // sync_status
+            )", new = SyncStatus::New as u8);
+
+        self.db.execute_named(&sql, &[
+            ("hostname", &login.hostname as &ToSql),
+            ("http_realm", &login.http_realm as &ToSql),
+            ("form_submit_url", &login.form_submit_url as &ToSql),
+            ("username_field", &login.username_field as &ToSql),
+            ("password_field", &login.password_field as &ToSql),
+            ("username", &login.username as &ToSql),
+            ("password", &login.password as &ToSql),
+            ("guid", &login.id as &ToSql),
+            ("time_created", &now_us as &ToSql),
+            ("time_last_used", &now_us as &ToSql),
+            ("time_password_changed", &now_us as &ToSql),
+            ("local_modified", &now_ms as &ToSql)
+        ])?;
+        Ok(())
+    }
+
+    pub fn update(&self, login: Login) -> Result<()> {
+        login.check_valid()?;
+        self.ensure_local_overlay_exists(login.guid_str())?;
+        self.mark_mirror_overridden(login.guid_str())?;
+
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_ms = now_us / 1000;
+
+        let sql = format!("
+            UPDATE loginsL
+            SET local_modified      = :now_millis,
+                timeLastUsed        = :now_micros,
+                // Only update timePasswordChanged if, well, the password changed.
+                timePasswordChanged = (CASE
+                    WHEN password = :password
+                    THEN timePasswordChanged
+                    ELSE :now_micros
+                END),
+                httpRealm           = :http_realm,
+                formSubmitURL       = :form_submit_url,
+                usernameField       = :username_field,
+                passwordField       = :password_field,
+                timesUsed           = timesUsed + 1,
+                username            = :username,
+                password            = :password,
+                hostname            = :hostname,
+                // leave New records as they are, otherwise update them to `changed`
+                sync_status         = max(sync_status, {changed})
+            WHERE guid = :guid",
+            changed = SyncStatus::Changed as u8
+        );
+
+        self.db.execute_named(&sql, &[
+            ("hostname", &login.hostname as &ToSql),
+            ("username", &login.username as &ToSql),
+            ("password", &login.password as &ToSql),
+            ("http_realm", &login.http_realm as &ToSql),
+            ("form_submit_url", &login.form_submit_url as &ToSql),
+            ("username_field", &login.username_field as &ToSql),
+            ("password_field", &login.password_field as &ToSql),
+            ("guid", &login.id as &ToSql),
+            ("now_micros", &now_us as &ToSql),
+            ("now_millis", &now_ms as &ToSql),
+        ])?;
         Ok(())
     }
 
     pub fn exists(&self, id: &str) -> Result<bool> {
-        let res: i64 = self.query_row_cached(
-            &*ID_EXISTS_SQL, &[&id as &ToSql], |row| Ok(row.get(0)))?.unwrap_or_default();
-        Ok(res != 0)
+        Ok(self.query_row(
+            &*ID_EXISTS_SQL,
+            &[&id as &ToSql, &id as &ToSql],
+            |row| Ok(row.get(0))
+        )?.unwrap_or(false))
     }
 
     /// Delete the record with the provided id. Returns true if the record
@@ -376,6 +497,75 @@ impl LoginDb {
             &[&now_ms as &ToSql, &now_us as &ToSql])?;
 
         Ok(exists)
+    }
+
+    fn ensure_local_overlay_exists(&self, guid: &str) -> Result<()> {
+        let already_have_local: bool = self.query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM loginsL WHERE guid = ?)",
+            &[&guid as &ToSql],
+            |row| Ok(row.get(0))
+        )?.unwrap_or_default();
+
+        if already_have_local {
+            return Ok(())
+        }
+
+        debug!("No overlay; cloning one for {:?}.", guid);
+        let changed = self.clone_mirror_to_overlay(guid)?;
+        if changed == 0 {
+            error!("Failed to create local overlay for GUID {:?}.", guid);
+            throw!(ErrorKind::NoSuchRecord(guid.to_owned()));
+        }
+        Ok(())
+    }
+
+    fn clone_mirror_to_overlay(&self, guid: &str) -> Result<usize> {
+        self.execute_cached_with_args(&*CLONE_SINGLE_MIRROR_SQL, &[&guid as &ToSql])
+    }
+
+    pub fn reset(&self) -> Result<()> {
+        info!("Executing reset on password store!");
+        self.execute_all(&[
+            &*CLONE_ENTIRE_MIRROR_SQL,
+            "DELETE FROM loginsM",
+            &format!("UPDATE loginsL SET sync_status = {}", SyncStatus::New as u8),
+        ])?;
+        self.set_last_sync(ServerTimestamp(0.0))?;
+        // TODO: Should we clear global_state?
+        Ok(())
+    }
+
+    pub fn wipe(&self) -> Result<()> {
+        info!("Executing reset on password store!");
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_ms = now_us / 1000;
+
+        self.execute(&format!("DELETE FROM loginsL WHERE sync_status = {new}", new = SyncStatus::New as u8))?;
+        self.execute_with_args(
+            &format!("
+                UPDATE loginsL
+                SET local_modified = ?,
+                    sync_status = {changed},
+                    is_deleted = 1,
+                    password = '',
+                    hostname = '',
+                    username = ''
+                WHERE is_deleted = 0",
+                changed = SyncStatus::Changed as u8),
+            &[&now_ms as &ToSql])?;
+
+        self.execute("UPDATE loginsM SET is_overridden = 1")?;
+
+        self.execute_with_args(
+            &format!("
+                INSERT OR IGNORE INTO loginsL
+                      (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
+                SELECT guid, ?,              1,          {changed},   '',       timeCreated, ?,                   '',       '')
+                FROM loginsM",
+                changed = SyncStatus::Changed as u8),
+            &[&now_ms as &ToSql, &now_us as &ToSql])?;
+
+        Ok(())
     }
 
 }
@@ -661,7 +851,8 @@ impl LoginDb {
     }
 
     fn put_meta(&self, key: &str, value: &ToSql) -> Result<()> {
-        self.execute_cached_with_args(&*META_PUT_SQL, &[&key as &ToSql, value])
+        self.execute_cached_with_args(&*META_PUT_SQL, &[&key as &ToSql, value])?;
+        Ok(())
     }
 
     fn get_meta<T: FromSql>(&self, key: &str) -> Result<Option<T>> {
@@ -669,6 +860,7 @@ impl LoginDb {
     }
 
     pub fn set_last_sync(&self, last_sync: ServerTimestamp) -> Result<()> {
+        debug!("Updating last sync to {}", last_sync);
         self.put_meta(schema::LAST_SYNC_META_KEY, &last_sync.0)
     }
 
@@ -707,13 +899,6 @@ impl Store for LoginDb {
     }
 }
 
-static COMMON_COLS: &'static str = "
-    guid, username, password,
-    hostname, httpRealm, formSubmitURL,
-    usernameField, passwordField,
-    timeCreated, timeLastUsed,
-    timePasswordChanged, timesUsed
-";
 
 lazy_static! {
 
@@ -738,24 +923,62 @@ lazy_static! {
         meta_table = schema::META_TABLE_NAME
     );
 
-    static ref GET_ALL_SQL: String = format!(
-        "SELECT {common_cols} FROM {local} WHERE is_deleted = 0",
-        common_cols = COMMON_COLS,
-        local = schema::LOCAL_TABLE_NAME
+    static ref GET_ALL_SQL: String = format!("
+        SELECT {common_cols} FROM {local} WHERE is_deleted = 0
+        UNION ALL
+        SELECT {common_cols} FROM {mirror} WHERE is_overridden = 0
+    ",
+        common_cols = schema::COMMON_COLS,
+        local = schema::LOCAL_TABLE_NAME,
+        mirror = schema::MIRROR_TABLE_NAME
     );
 
-    static ref GET_BY_ID_SQL: String = format!(
-        "SELECT {common_cols} FROM {local} WHERE guid = ?",
-        common_cols = COMMON_COLS,
-        local = schema::LOCAL_TABLE_NAME
+    // Note: takes two positional args
+    static ref GET_BY_GUID_SQL: String = format!("
+        SELECT {common_cols}
+        FROM {local}
+        WHERE is_deleted = 0
+          AND guid = ?
+
+        UNION ALL
+
+        SELECT {common_cols}
+        FROM {mirror}
+        WHERE is_overriden IS NOT 1
+          AND guid = ?
+        ORDER BY hostname ASC
+
+        LIMIT 1
+    ",
+        common_cols = schema::COMMON_COLS,
+        local = schema::LOCAL_TABLE_NAME,
+        mirror = schema::MIRROR_TABLE_NAME
     );
 
     static ref ID_EXISTS_SQL: String = format!("
         SELECT EXISTS(
             SELECT 1 FROM {local}
-            WHERE guid = ?
-            AND is_deleted = 0
-        )
-    ", local = schema::LOCAL_TABLE_NAME);
+            WHERE guid = ? AND is_deleted = 0
+            UNION ALL
+            SELECT 1 FROM {mirror}
+            WHERE guid = ? AND is_overridden IS NOT 1
+        )",
+        local = schema::LOCAL_TABLE_NAME,
+        mirror = schema::MIRROR_TABLE_NAME,
+    );
+
+    static ref CLONE_ENTIRE_MIRROR_SQL: String = format!("
+        INSERT OR IGNORE INTO {local} ({common_cols}, local_modified, is_deleted, sync_status)
+        SELECT {common_cols}, NULL AS local_modified, 0 AS is_deleted, 0 AS sync_status
+        FROM {mirror}",
+        local = schema::LOCAL_TABLE_NAME,
+        mirror = schema::MIRROR_TABLE_NAME,
+        common_cols = schema::COMMON_COLS,
+    );
+
+    static ref CLONE_SINGLE_MIRROR_SQL: String = format!(
+        "{} WHERE guid = ?",
+        &*CLONE_ENTIRE_MIRROR_SQL
+    );
 
 }

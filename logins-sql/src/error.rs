@@ -13,7 +13,8 @@ use url;
 pub type Result<T> = std::result::Result<T, Error>;
 
 // Backported part of the (someday real) failure 1.x API, basically equivalent
-// to error_chain's `bail!`
+// to error_chain's `bail!` (We don't call it that because `failure` has a
+// `bail` macro with different semantics)
 macro_rules! throw {
     ($e:expr) => {
         return Err(::std::convert::Into::into($e));
@@ -74,6 +75,9 @@ pub enum ErrorKind {
 
     #[fail(display = "A duplicate GUID is present: {:?}", _0)]
     DuplicateGuid(String),
+
+    #[fail(display = "No record with guid exists (when one was required): {:?}", _0)]
+    NoSuchRecord(String),
 
     #[fail(display = "Error synchronizing: {}", _0)]
     SyncAdapterError(#[fail(cause)] sync::Error),
