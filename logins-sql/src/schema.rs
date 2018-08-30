@@ -110,7 +110,7 @@ pub fn init(db: &db::LoginDb) -> Result<()> {
     let user_version = db.query_one::<i64>("PRAGMA user_version")?;
     if user_version == 0 {
         let table_list_exists = db.query_one::<i64>(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tableList'"
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'tableList'"
         )? != 0;
 
         if !table_list_exists {

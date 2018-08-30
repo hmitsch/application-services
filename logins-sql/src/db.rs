@@ -15,7 +15,7 @@ use util;
 pub const MAX_VARIABLE_NUMBER: usize = 999;
 
 pub struct LoginDb {
-    db: Connection,
+    pub(crate) db: Connection,
 }
 
 // In PRAGMA foo='bar', `'bar'` must be a constant string (it cannot be a
@@ -28,6 +28,10 @@ fn escape_string_for_pragma(s: &str) -> String {
 
 impl LoginDb {
     pub fn with_connection(db: Connection, encryption_key: Option<&str>) -> Result<Self> {
+        #[cfg(test)] {
+            util::init_test_logging();
+        }
+
         let encryption_pragmas = if let Some(key) = encryption_key {
             // TODO: We probably should support providing a key that doesn't go
             // through PBKDF2 (e.g. pass it in as hex, or use sqlite3_key
@@ -76,23 +80,23 @@ impl LoginDb {
     }
 
     #[inline]
-    pub fn execute(&self, stmt: impl AsRef<str>) -> Result<usize> {
-        Ok(self.do_exec(stmt.as_ref(), &[], false)?)
+    pub fn execute(&self, stmt: &str) -> Result<usize> {
+        Ok(self.do_exec(stmt, &[], false)?)
     }
 
     #[inline]
-    pub fn execute_cached(&self, stmt: impl AsRef<str>) -> Result<usize> {
-        Ok(self.do_exec(stmt.as_ref(), &[], true)?)
+    pub fn execute_cached(&self, stmt: &str) -> Result<usize> {
+        Ok(self.do_exec(stmt, &[], true)?)
     }
 
     #[inline]
-    pub fn execute_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<usize> {
-        Ok(self.do_exec(stmt.as_ref(), params, false)?)
+    pub fn execute_with_args(&self, stmt: &str, params: &[&ToSql]) -> Result<usize> {
+        Ok(self.do_exec(stmt, params, false)?)
     }
 
     #[inline]
-    pub fn execute_cached_with_args(&self, stmt: impl AsRef<str>, params: &[&ToSql]) -> Result<usize> {
-        Ok(self.do_exec(stmt.as_ref(), params, true)?)
+    pub fn execute_cached_with_args(&self, stmt: &str, params: &[&ToSql]) -> Result<usize> {
+        Ok(self.do_exec(stmt, params, true)?)
     }
 
     fn do_exec(&self, sql: &str, params: &[&ToSql], cache: bool) -> Result<usize> {
@@ -101,6 +105,29 @@ impl LoginDb {
                    .and_then(|mut s| s.execute(params))
         } else {
             self.db.execute(sql, params)
+        };
+        if let Err(e) = &res {
+            warn!("Error running SQL {}. Statement: {:?}", e, sql);
+        }
+        Ok(res?)
+    }
+
+    #[inline]
+    pub fn execute_named(&self, stmt: &str, params: &[(&str, &ToSql)]) -> Result<usize> {
+        Ok(self.do_exec_named(stmt, params, false)?)
+    }
+
+    #[inline]
+    pub fn execute_named_cached(&self, stmt: &str, params: &[(&str, &ToSql)]) -> Result<usize> {
+        Ok(self.do_exec_named(stmt, params, true)?)
+    }
+
+    fn do_exec_named(&self, sql: &str, params: &[(&str, &ToSql)], cache: bool) -> Result<usize> {
+        let res = if cache {
+            self.db.prepare_cached(sql)
+                   .and_then(|mut s| s.execute_named(params))
+        } else {
+            self.db.execute_named(sql, params)
         };
         if let Err(e) = &res {
             warn!("Error running SQL {}. Statement: {:?}", e, sql);
@@ -246,7 +273,7 @@ impl LoginDb {
                 FROM {local_table}
                 JOIN to_fetch
                   ON {local_table}.guid = to_fetch.fetch_guid",
-                // giv each VALUES item 2 entries, an index and the parameter.
+                // give each VALUES item 2 entries, an index and the parameter.
                 vals = values_with_idx,
                 local_table = schema::LOCAL_TABLE_NAME,
                 mirror_table = schema::MIRROR_TABLE_NAME,
@@ -324,14 +351,16 @@ impl LoginDb {
         let now_ms = now_us / 1000;
         // As on iOS, just using a record doesn't flip it's status to changed.
         // TODO: this might be wrong for lockbox!
-        self.execute_cached_with_args("
+        self.execute_named_cached("
             UPDATE loginsL
-               SET timeLastUsed = ?,
+               SET timeLastUsed = :now_micros,
                    timesUsed = timesUsed + 1,
-                   local_modified = ?
-               WHERE guid = ?
+                   local_modified = :now_millis
+               WHERE guid = :guid
                  AND is_deleted = 0",
-            &[&now_us as &ToSql, &now_ms as &ToSql, &id as &ToSql]
+            &[(":now_micros", &now_us as &ToSql),
+              (":now_millis", &now_ms as &ToSql),
+              (":guid", &id as &ToSql)]
         )?;
         Ok(())
     }
@@ -365,7 +394,7 @@ impl LoginDb {
                 :form_submit_url,
                 :username_field,
                 :password_field,
-                1, // timesUsed
+                1, -- timesUsed
                 :username,
                 :password,
                 :guid,
@@ -373,23 +402,23 @@ impl LoginDb {
                 :time_last_used,
                 :time_password_changed,
                 :local_modified,
-                0, // isDeleted
-                {new} // sync_status
+                0, -- isDeleted
+                {new} -- sync_status
             )", new = SyncStatus::New as u8);
 
-        self.db.execute_named(&sql, &[
-            ("hostname", &login.hostname as &ToSql),
-            ("http_realm", &login.http_realm as &ToSql),
-            ("form_submit_url", &login.form_submit_url as &ToSql),
-            ("username_field", &login.username_field as &ToSql),
-            ("password_field", &login.password_field as &ToSql),
-            ("username", &login.username as &ToSql),
-            ("password", &login.password as &ToSql),
-            ("guid", &login.id as &ToSql),
-            ("time_created", &now_us as &ToSql),
-            ("time_last_used", &now_us as &ToSql),
-            ("time_password_changed", &now_us as &ToSql),
-            ("local_modified", &now_ms as &ToSql)
+        self.execute_named(&sql, &[
+            (":hostname", &login.hostname as &ToSql),
+            (":http_realm", &login.http_realm as &ToSql),
+            (":form_submit_url", &login.form_submit_url as &ToSql),
+            (":username_field", &login.username_field as &ToSql),
+            (":password_field", &login.password_field as &ToSql),
+            (":username", &login.username as &ToSql),
+            (":password", &login.password as &ToSql),
+            (":guid", &login.id as &ToSql),
+            (":time_created", &now_us as &ToSql),
+            (":time_last_used", &now_us as &ToSql),
+            (":time_password_changed", &now_us as &ToSql),
+            (":local_modified", &now_ms as &ToSql)
         ])?;
         Ok(())
     }
@@ -406,7 +435,7 @@ impl LoginDb {
             UPDATE loginsL
             SET local_modified      = :now_millis,
                 timeLastUsed        = :now_micros,
-                // Only update timePasswordChanged if, well, the password changed.
+                -- Only update timePasswordChanged if, well, the password changed.
                 timePasswordChanged = (CASE
                     WHEN password = :password
                     THEN timePasswordChanged
@@ -420,23 +449,23 @@ impl LoginDb {
                 username            = :username,
                 password            = :password,
                 hostname            = :hostname,
-                // leave New records as they are, otherwise update them to `changed`
+                -- leave New records as they are, otherwise update them to `changed`
                 sync_status         = max(sync_status, {changed})
             WHERE guid = :guid",
             changed = SyncStatus::Changed as u8
         );
 
         self.db.execute_named(&sql, &[
-            ("hostname", &login.hostname as &ToSql),
-            ("username", &login.username as &ToSql),
-            ("password", &login.password as &ToSql),
-            ("http_realm", &login.http_realm as &ToSql),
-            ("form_submit_url", &login.form_submit_url as &ToSql),
-            ("username_field", &login.username_field as &ToSql),
-            ("password_field", &login.password_field as &ToSql),
-            ("guid", &login.id as &ToSql),
-            ("now_micros", &now_us as &ToSql),
-            ("now_millis", &now_ms as &ToSql),
+            (":hostname", &login.hostname as &ToSql),
+            (":username", &login.username as &ToSql),
+            (":password", &login.password as &ToSql),
+            (":http_realm", &login.http_realm as &ToSql),
+            (":form_submit_url", &login.form_submit_url as &ToSql),
+            (":username_field", &login.username_field as &ToSql),
+            (":password_field", &login.password_field as &ToSql),
+            (":guid", &login.id as &ToSql),
+            (":now_micros", &now_us as &ToSql),
+            (":now_millis", &now_ms as &ToSql),
         ])?;
         Ok(())
     }
@@ -462,7 +491,8 @@ impl LoginDb {
             WHERE guid = ?
               AND sync_status = {status_new}",
             local = schema::LOCAL_TABLE_NAME,
-            status_new = SyncStatus::New as u8), &[])?;
+            status_new = SyncStatus::New as u8),
+            &[&id as &ToSql])?;
 
         // For IDs that have, mark is_deleted and clear sensitive fields
         self.db.execute(&format!("
@@ -476,7 +506,7 @@ impl LoginDb {
             WHERE guid = ?",
             local = schema::LOCAL_TABLE_NAME,
             status_changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql])?;
+            &[&now_ms as &ToSql, &id as &ToSql])?;
 
         // Mark the mirror as overridden
         self.db.execute(&format!("UPDATE {mirror} SET is_overridden = 1 WHERE guid = ?",
@@ -494,7 +524,7 @@ impl LoginDb {
             local = schema::LOCAL_TABLE_NAME,
             mirror = schema::MIRROR_TABLE_NAME,
             changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql, &now_us as &ToSql])?;
+            &[&now_ms as &ToSql, &now_us as &ToSql, &id as &ToSql])?;
 
         Ok(exists)
     }
@@ -944,7 +974,7 @@ lazy_static! {
 
         SELECT {common_cols}
         FROM {mirror}
-        WHERE is_overriden IS NOT 1
+        WHERE is_overridden IS NOT 1
           AND guid = ?
         ORDER BY hostname ASC
 

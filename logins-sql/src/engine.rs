@@ -140,3 +140,108 @@ impl PasswordEngine {
 
 }
 
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::time::SystemTime;
+    use util;
+    // Doesn't check metadata fields
+    fn assert_logins_equiv(a: &Login, b: &Login) {
+        assert_eq!(b.id, a.id);
+        assert_eq!(b.hostname, a.hostname);
+        assert_eq!(b.form_submit_url, a.form_submit_url);
+        assert_eq!(b.http_realm, a.http_realm);
+        assert_eq!(b.username, a.username);
+        assert_eq!(b.password, a.password);
+        assert_eq!(b.username_field, a.username_field);
+        assert_eq!(b.password_field, a.password_field);
+    }
+
+    #[test]
+    fn test_general() {
+        let engine = PasswordEngine::new_in_memory(Some("secret")).unwrap();
+        let list = engine.list().expect("Grabbing Empty list to work");
+        assert_eq!(list.len(), 0);
+        let start_us = util::system_time_us_i64(SystemTime::now());
+
+        let a = Login {
+            id: "aaaaaaaaaaaa".into(),
+            hostname: "https://www.example.com".into(),
+            form_submit_url: Some("https://www.example.com/login".into()),
+            username: "coolperson21".into(),
+            password: "p4ssw0rd".into(),
+            username_field: "user_input".into(),
+            password_field: "pass_input".into(),
+            .. Login::default()
+        };
+
+        let b = Login {
+            id: "bbbbbbbbbbbb".into(),
+            hostname: "https://www.example2.com".into(),
+            http_realm: Some("Some String Here".into()),
+            username: "asdf".into(),
+            password: "fdsa".into(),
+            username_field: "input_user".into(),
+            password_field: "input_pass".into(),
+            .. Login::default()
+        };
+
+        engine.add(a.clone()).expect("added a");
+        engine.add(b.clone()).expect("added b");
+
+        let a_from_db = engine.get(a.guid_str())
+            .expect("Not to error getting a")
+            .expect("a to exist");
+
+        assert_logins_equiv(&a_from_db, &a);
+        assert_gt!(a_from_db.time_created, start_us);
+        assert_gt!(a_from_db.time_password_changed, start_us);
+        assert_gt!(a_from_db.time_last_used, start_us);
+        assert_eq!(a_from_db.times_used, 1);
+
+        let b_from_db = engine.get(b.guid_str())
+            .expect("Not to error getting b")
+            .expect("b to exist");
+
+        assert_logins_equiv(&b_from_db, &b);
+        assert_gt!(b_from_db.time_created, start_us);
+        assert_gt!(b_from_db.time_password_changed, start_us);
+        assert_gt!(b_from_db.time_last_used, start_us);
+        assert_eq!(b_from_db.times_used, 1);
+
+        let mut list = engine.list().expect("Grabbing list to work");
+        assert_eq!(list.len(), 2);
+        let mut expect = vec![a_from_db.clone(), b_from_db.clone()];
+
+        list.sort_by(|a, b| b.id.cmp(&a.id));
+        expect.sort_by(|a, b| b.id.cmp(&a.id));
+        assert_eq!(list, expect);
+
+        engine.delete(a.guid_str()).expect("Successful delete");
+        assert!(engine.get(a.guid_str())
+            .expect("get after delete should still work")
+            .is_none());
+
+        let list = engine.list().expect("Grabbing list to work");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0], b_from_db);
+
+        let now_us = util::system_time_us_i64(SystemTime::now());
+        let b2 = Login { password: "newpass".into(), .. b.clone() };
+
+        engine.update(b2.clone()).expect("update b should work");
+
+        let b_after_update = engine.get(b.guid_str())
+            .expect("Not to error getting b")
+            .expect("b to exist");
+
+        assert_logins_equiv(&b_after_update, &b2);
+        assert_gt!(b_after_update.time_created, start_us);
+        assert_lt!(b_after_update.time_created, now_us);
+        assert_gt!(b_after_update.time_password_changed, now_us);
+        assert_gt!(b_after_update.time_last_used, now_us);
+        // Should be two even though we updated twice
+        assert_eq!(b_after_update.times_used, 2);
+    }
+}

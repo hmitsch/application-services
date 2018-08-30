@@ -106,6 +106,19 @@ pub fn system_time_us_i64(t: time::SystemTime) -> i64 {
     duration_us_i64(t.duration_since(time::UNIX_EPOCH).unwrap_or_default())
 }
 
+// Unfortunately, there's not a better way to turn on logging in tests AFAICT
+#[cfg(test)]
+pub(crate) fn init_test_logging() {
+    use env_logger;
+    use std::sync::{Once, ONCE_INIT};
+    static INIT_LOGGING: Once = ONCE_INIT;
+    INIT_LOGGING.call_once(|| {
+        env_logger::init_from_env(
+            env_logger::Env::default().filter_or("RUST_LOG", "trace")
+        );
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

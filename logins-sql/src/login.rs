@@ -8,7 +8,7 @@ use util;
 use std::time::{self, SystemTime};
 use error::*;
 
-#[derive(Debug, Clone, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Login {
     // TODO: consider `#[serde(rename = "id")] pub guid: String` to avoid confusion

@@ -7,6 +7,9 @@ extern crate sync15_adapter as sync;
 #[macro_use]
 extern crate log;
 
+#[cfg(test)]
+extern crate env_logger;
+
 #[macro_use]
 extern crate lazy_static;
 
