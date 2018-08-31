@@ -56,6 +56,10 @@ impl PasswordEngine {
         self.db.wipe()
     }
 
+    pub fn reset(&self) -> Result<()> {
+        self.db.reset()
+    }
+
     pub fn update(&self, login: Login) -> Result<()> {
         self.db.update(login)
     }
@@ -116,6 +120,11 @@ impl PasswordEngine {
             info!("Advancing state machine to ready (full)");
             let next_sync_state = state_machine.to_ready(sync_info.state)?;
             sync_info.state = next_sync_state;
+        }
+
+        if sync_info.state.engines_that_need_local_reset().contains("passwords") {
+            info!("Passwords sync ID changed; engine needs local reset");
+            self.db.reset()?;
         }
 
         info!("Updating persisted global state");

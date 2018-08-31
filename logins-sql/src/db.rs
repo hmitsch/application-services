@@ -15,7 +15,7 @@ use util;
 pub const MAX_VARIABLE_NUMBER: usize = 999;
 
 pub struct LoginDb {
-    pub(crate) db: Connection,
+    pub db: Connection,
 }
 
 // In PRAGMA foo='bar', `'bar'` must be a constant string (it cannot be a
@@ -168,15 +168,6 @@ impl LoginDb {
             Some(result) => Ok(Some(f(&result?)?)),
             None => Ok(None),
         }
-    }
-
-    fn mark_mirror_overridden(&self, guid: &str) -> Result<()> {
-        self.execute_cached_with_args("
-            UPDATE loginsM SET
-            is_overridden = 1
-            WHERE guid = ?
-        ", &[&guid as &ToSql])?;
-        Ok(())
     }
 }
 
@@ -529,6 +520,15 @@ impl LoginDb {
         Ok(exists)
     }
 
+    fn mark_mirror_overridden(&self, guid: &str) -> Result<()> {
+        self.execute_cached_with_args("
+            UPDATE loginsM SET
+            is_overridden = 1
+            WHERE guid = ?
+        ", &[&guid as &ToSql])?;
+        Ok(())
+    }
+
     fn ensure_local_overlay_exists(&self, guid: &str) -> Result<()> {
         let already_have_local: bool = self.query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM loginsL WHERE guid = ?)",
@@ -597,7 +597,6 @@ impl LoginDb {
 
         Ok(())
     }
-
 }
 
 #[derive(Default, Debug, Clone)]
@@ -849,7 +848,7 @@ impl LoginDb {
         Ok(())
     }
 
-    fn fetch_outgoing(&mut self, st: ServerTimestamp) -> Result<OutgoingChangeset> {
+    pub fn fetch_outgoing(&self, st: ServerTimestamp) -> Result<OutgoingChangeset> {
         let mut outgoing = OutgoingChangeset::new("passwords".into(), st);
         let mut stmt = self.db.prepare_cached(&format!("
             SELECT * FROM {local}
