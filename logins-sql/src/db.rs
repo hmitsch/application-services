@@ -807,6 +807,7 @@ impl UpdatePlan {
                 &l.login.password as &ToSql,
                 &l.login.hostname as &ToSql,
                 &l.login.username as &ToSql,
+                &l.guid_str() as &ToSql,
             ])?;
         }
         Ok(())
