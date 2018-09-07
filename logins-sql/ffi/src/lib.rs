@@ -186,9 +186,9 @@ pub unsafe extern "C" fn sync15_passwords_add(
     state: *const PasswordEngine,
     record_json: *const c_char,
     error: *mut ExternError
-) {
+) -> *mut c_char {
     trace!("sync15_passwords_add");
-    with_translated_void_result(error, || {
+    with_translated_string_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_add");
         let state = &*state;
         let mut parsed: serde_json::Value = serde_json::from_str(c_str_to_str(record_json))?;
@@ -198,7 +198,7 @@ pub unsafe extern "C" fn sync15_passwords_add(
         }
         let login: Login = serde_json::from_value(parsed)?;
         state.add(login)
-    });
+    })
 }
 
 #[no_mangle]
