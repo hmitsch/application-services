@@ -10,6 +10,9 @@ extern crate url;
 extern crate reqwest;
 #[macro_use] extern crate log;
 
+#[cfg(target_os = "android")]
+extern crate android_logger;
+
 pub mod error;
 
 use std::os::raw::c_char;
@@ -29,58 +32,19 @@ use logins_sql::{
     PasswordEngine,
 };
 
-use std::sync::{Once, ONCE_INIT};
-
-#[cfg(target_os = "android")]
-extern {
-    pub fn __android_log_write(
-        level: ::std::os::raw::c_int,
-        tag: *const c_char,
-        text: *const c_char
-    ) -> ::std::os::raw::c_int;
-}
-
-struct DevLogger;
-impl log::Log for DevLogger {
-    fn enabled(&self, _: &log::Metadata) -> bool { true }
-    fn log(&self, record: &log::Record) {
-        let message = format!("{}:{} -- {}", record.level(), record.target(), record.args());
-        println!("{}", message);
-        #[cfg(target_os = "android")]
-        {
-            unsafe {
-                let message = ::std::ffi::CString::new(message).unwrap();
-                let level_int = match record.level() {
-                    log::Level::Trace => 2,
-                    log::Level::Debug => 3,
-                    log::Level::Info => 4,
-                    log::Level::Warn => 5,
-                    log::Level::Error => 6,
-                };
-                let message = message.as_ptr();
-                let tag = b"RustInternal\0";
-                __android_log_write(level_int, tag.as_ptr() as *const c_char, message);
-            }
-        }
-        // TODO ios (use NSLog(__CFStringMakeConstantString(b"%s\0"), ...), maybe windows? (OutputDebugStringA)
-    }
-    fn flush(&self) {}
-}
-
-static INIT_LOGGER: Once = ONCE_INIT;
-static DEV_LOGGER: &'static log::Log = &DevLogger;
-
-fn init_logger() {
-    log::set_logger(DEV_LOGGER).unwrap();
-    log::set_max_level(log::LevelFilter::Trace);
-    std::env::set_var("RUST_BACKTRACE", "1");
-    info!("Hooked up rust logger!");
-}
-
 #[inline]
 unsafe fn c_str_to_str<'a>(cstr: *const c_char) -> &'a str {
-    assert!(!cstr.is_null(), "Null string passed to rust function");
     CStr::from_ptr(cstr).to_str().unwrap_or_default()
+}
+
+fn logging_init() {
+    #[cfg(target_os = "android")]
+    {
+        android_logger::init_once(
+            android_logger::Filter::default().with_min_level(log::LogLevel::Trace),
+            Some("libloginsapi_ffi"));
+        debug!("Android logging should be hooked up!")
+    }
 }
 
 #[no_mangle]
@@ -89,7 +53,8 @@ pub unsafe extern "C" fn sync15_passwords_state_new(
     encryption_key: *const c_char,
     error: *mut ExternError
 ) -> *mut PasswordEngine {
-    INIT_LOGGER.call_once(init_logger);
+    logging_init();
+    trace!("sync15_passwords_state_new");
     with_translated_result(error, || {
         let path = c_str_to_str(mentat_db_path);
         let key = c_str_to_str(encryption_key);
@@ -112,6 +77,7 @@ pub unsafe extern "C" fn sync15_passwords_sync(
     tokenserver_url: *const c_char,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_sync");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_sync");
         let state = &mut *state;
@@ -134,6 +100,7 @@ pub unsafe extern "C" fn sync15_passwords_touch(
     id: *const c_char,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_touch");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_touch");
         let state = &*state;
@@ -147,6 +114,7 @@ pub unsafe extern "C" fn sync15_passwords_delete(
     id: *const c_char,
     error: *mut ExternError
 ) -> bool {
+    trace!("sync15_passwords_delete");
     with_translated_value_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_delete");
         let state = &*state;
@@ -159,6 +127,7 @@ pub unsafe extern "C" fn sync15_passwords_wipe(
     state: *const PasswordEngine,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_wipe");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_wipe");
         let state = &*state;
@@ -171,6 +140,7 @@ pub unsafe extern "C" fn sync15_passwords_reset(
     state: *const PasswordEngine,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_reset");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_reset");
         let state = &*state;
@@ -183,6 +153,7 @@ pub unsafe extern "C" fn sync15_passwords_get_all(
     state: *const PasswordEngine,
     error: *mut ExternError
 ) -> *mut c_char {
+    trace!("sync15_passwords_get_all");
     with_translated_string_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_get_all");
         let state = &*state;
@@ -198,6 +169,7 @@ pub unsafe extern "C" fn sync15_passwords_get_by_id(
     id: *const c_char,
     error: *mut ExternError
 ) -> *mut c_char {
+    trace!("sync15_passwords_get_by_id");
     with_translated_opt_string_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_get_by_id");
         let state = &*state;
@@ -215,11 +187,17 @@ pub unsafe extern "C" fn sync15_passwords_add(
     record_json: *const c_char,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_add");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_add");
         let state = &*state;
-        let parsed: Login = serde_json::from_str(c_str_to_str(record_json))?;
-        state.add(parsed)
+        let mut parsed: serde_json::Value = serde_json::from_str(c_str_to_str(record_json))?;
+        if parsed.get("id").is_none() {
+            // Note: we replace this with a real guid in `db.rs`.
+            parsed["id"] = serde_json::Value::String(String::default());
+        }
+        let login: Login = serde_json::from_value(parsed)?;
+        state.add(login)
     });
 }
 
@@ -229,6 +207,7 @@ pub unsafe extern "C" fn sync15_passwords_update(
     record_json: *const c_char,
     error: *mut ExternError
 ) {
+    trace!("sync15_passwords_update");
     with_translated_void_result(error, || {
         assert!(!state.is_null(), "Null state passed to sync15_passwords_update");
         let state = &*state;

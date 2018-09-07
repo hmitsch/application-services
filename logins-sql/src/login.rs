@@ -34,8 +34,10 @@ pub struct Login {
     #[serde(default)]
     pub password_field: String,
 
-    // Next three fields are in microseconds!
+    #[serde(default)]
     pub time_created: i64,
+
+    #[serde(default)]
     pub time_password_changed: i64,
 
     #[serde(default)]

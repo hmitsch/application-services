@@ -110,7 +110,7 @@ pub enum ExternErrorCode {
     UnexpectedPanic = -2,
 
     /// An unexpected error occurred which likely cannot be meaningfully handled
-    /// by the application.
+    /// by the application. For example, network errors and the like are here.
     OtherError = -1,
 
     /// No error occcurred.
@@ -168,6 +168,7 @@ impl Default for ExternError {
 fn get_code(err: &Error) -> ExternErrorCode {
     match err.kind() {
         ErrorKind::SyncAdapterError(e) => {
+            error!("Sync error {:?}", e);
             match e.kind() {
                 Sync15ErrorKind::TokenserverHttpError(StatusCode::Unauthorized) => {
                     ExternErrorCode::AuthInvalidError
@@ -175,7 +176,10 @@ fn get_code(err: &Error) -> ExternErrorCode {
                 _ => ExternErrorCode::OtherError,
             }
         }
-        _ => ExternErrorCode::OtherError,
+        err => {
+            error!("Unexpected error: {:?}", err);
+            ExternErrorCode::OtherError
+        }
     }
 }
 

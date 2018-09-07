@@ -356,11 +356,31 @@ impl LoginDb {
         Ok(())
     }
 
-    pub fn add(&self, login: Login) -> Result<()> {
+    pub fn add(&self, mut login: Login) -> Result<Login> {
         login.check_valid()?;
 
         let now_us = util::system_time_us_i64(SystemTime::now());
         let now_ms = now_us / 1000;
+
+        // Allow an empty GUID to be passed to indicate that we should generate
+        // one. (Note that the FFI, does not require that the `id` field be
+        // present in the JSON, and replaces it with an empty string if missing).
+        if login.id.is_empty() {
+            // Our FFI handles panics so this is fine. In practice there's not
+            // much we can do here. Using a CSPRNG for this is probably
+            // unnecessary, so we likely could fall back to something less
+            // fallible eventually, but it's unlikely very much else will work
+            // if this fails, so it doesn't matter much.
+            login.id = sync::util::random_guid()
+                .expect("Failed to generate failed to generate random bytes for GUID");
+        }
+
+        // Fill in default metadata.
+        // TODO: allow this to be provided for testing?
+        login.time_created = now_us;
+        login.time_password_changed = now_us;
+        login.time_last_used = now_us;
+        login.times_used = 1;
 
         let sql = format!("
             INSERT OR IGNORE INTO loginsL (
@@ -385,7 +405,7 @@ impl LoginDb {
                 :form_submit_url,
                 :username_field,
                 :password_field,
-                1, -- timesUsed
+                :times_used,
                 :username,
                 :password,
                 :guid,
@@ -393,11 +413,11 @@ impl LoginDb {
                 :time_last_used,
                 :time_password_changed,
                 :local_modified,
-                0, -- isDeleted
+                0, -- is_deleted
                 {new} -- sync_status
             )", new = SyncStatus::New as u8);
 
-        self.execute_named(&sql, &[
+        let rows_changed = self.execute_named(&sql, &[
             (":hostname", &login.hostname as &ToSql),
             (":http_realm", &login.http_realm as &ToSql),
             (":form_submit_url", &login.form_submit_url as &ToSql),
@@ -406,16 +426,23 @@ impl LoginDb {
             (":username", &login.username as &ToSql),
             (":password", &login.password as &ToSql),
             (":guid", &login.id as &ToSql),
-            (":time_created", &now_us as &ToSql),
-            (":time_last_used", &now_us as &ToSql),
-            (":time_password_changed", &now_us as &ToSql),
+            (":time_created", &login.time_created as &ToSql),
+            (":times_used", &login.times_used as &ToSql),
+            (":time_last_used", &login.time_last_used as &ToSql),
+            (":time_password_changed", &login.time_password_changed as &ToSql),
             (":local_modified", &now_ms as &ToSql)
         ])?;
-        Ok(())
+        if rows_changed == 0 {
+            error!("Record {:?} already exists (use `update` to update records, not add)",
+                   login.id);
+            throw!(ErrorKind::DuplicateGuid(login.id));
+        }
+        Ok(login)
     }
 
     pub fn update(&self, login: Login) -> Result<()> {
         login.check_valid()?;
+        // Note: These fail with DuplicateGuid if the record doesn't exist.
         self.ensure_local_overlay_exists(login.guid_str())?;
         self.mark_mirror_overridden(login.guid_str())?;
 
