@@ -21,6 +21,7 @@ extern crate log;
 extern crate env_logger;
 extern crate chrono;
 extern crate failure;
+use failure::Fail;
 
 use std::{fs, io::{self, Read, Write}};
 use std::collections::HashMap;
@@ -86,11 +87,6 @@ fn create_fxa_creds(cfg: Config) -> Result<FirefoxAccount> {
     file.flush()?;
     Ok(acct)
 }
-
-// fn read_json_file<T>(path: &str) -> Result<T> where for<'a> T: serde::de::Deserialize<'a> {
-//     let file = fs::File::open(path)?;
-//     Ok(serde_json::from_reader(&file)?)
-// }
 
 fn prompt_string<S: AsRef<str>>(prompt: S) -> Option<String> {
     print!("{}: ", prompt.as_ref());
@@ -203,7 +199,7 @@ fn timestamp_to_string(microsecs: i64) -> String {
     use std::time::{UNIX_EPOCH, Duration};
     let time = UNIX_EPOCH + Duration::from_micros(microsecs as u64);
     let dtl: DateTime<Local> = time.into();
-    dtl.format("%l:%M:%s %p, %h %e, %Y").to_string()
+    dtl.format("%l:%M:%S %p%n%h %e, %Y").to_string()
 }
 
 fn show_sql(e: &PasswordEngine, sql: &str) -> Result<()> {
@@ -247,18 +243,18 @@ fn show_all(engine: &PasswordEngine) -> Result<Vec<String>> {
 
     table.add_row(row![bc =>
         "(idx)",
-        "guid",
-        "username",
-        "password",
-        "hostname",
+        "Guid",
+        "Username",
+        "Password",
+        "Host",
 
-        "formSubmitURL",
-        "httpRealm",
+        "Submit URL",
+        "HTTP Realm",
 
-        "usernameField",
-        "passwordField",
+        "User Field",
+        "Pass Field",
 
-        "timesUsed",
+        "Uses",
         "createdAt",
         "changedAt",
         "lastUsed"
@@ -274,7 +270,7 @@ fn show_all(engine: &PasswordEngine) -> Result<Vec<String>> {
             &rec.username,
             Fd->&rec.password,
 
-            Fb->&rec.hostname,
+            &rec.hostname,
             string_opt_or(&rec.form_submit_url, ""),
             string_opt_or(&rec.http_realm, ""),
 
@@ -306,11 +302,16 @@ fn prompt_record_id(e: &PasswordEngine, action: &str) -> Result<Option<String>> 
     Ok(Some(index_to_id[input].clone()))
 }
 
-fn main() -> Result<()> {
+fn init_logging() {
+    // Explicitly ignore some rather noisy crates. Turn on trace for everyone else.
+    let spec = "trace,tokio_threadpool=warn,tokio_reactor=warn,tokio_core=warn,tokio=warn,hyper=warn,want=warn,mio=warn,reqwest=warn";
     env_logger::init_from_env(
-        env_logger::Env::default().filter_or("RUST_LOG", "trace")
+        env_logger::Env::default().filter_or("RUST_LOG", spec)
     );
-
+}
+fn main() -> Result<()> {
+    init_logging();
+    std::env::set_var("RUST_BACKTRACE", "1");
     let cfg = Config::import_from(CONTENT_BASE)?;
     let tokenserver_url = cfg.token_server_endpoint_url()?;
 
@@ -338,7 +339,8 @@ fn main() -> Result<()> {
     let root_sync_key = KeyBundle::from_ksync_base64(&key.k)?;
 
     let mut engine = PasswordEngine::new("./logins.db",
-        Some(&prompt_string("Enter database secret key").expect("No secret key provided, exiting")))?;
+        Some(&prompt_string("Enter database secret key (if this is the first time, make one up)")
+            .expect("No secret key provided, exiting")))?;
 
     info!("Engine has {} passwords", engine.list()?.len());
 
@@ -411,6 +413,7 @@ fn main() -> Result<()> {
                 info!("Syncing!");
                 if let Err(e) = engine.sync(&client_init, &root_sync_key) {
                     warn!("Sync failed! {}", e);
+                    warn!("BT: {:?}", e.backtrace());
                 } else {
                     info!("Sync was successful!");
                 }

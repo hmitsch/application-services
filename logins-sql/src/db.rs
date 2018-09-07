@@ -716,7 +716,7 @@ impl UpdatePlan {
                 timeCreated = coalesce(nullif(?, 0), timeCreated),
                 password = ?,
                 hostname = ?,
-                username = ?,
+                username = ?
             WHERE guid = ?
         ", mirror = schema::MIRROR_TABLE_NAME);
         let mut stmt = tx.prepare_cached(&sql)?;
@@ -775,7 +775,7 @@ impl UpdatePlan {
     fn perform_local_updates(&self, tx: &mut Transaction) -> Result<()> {
         let sql = format!("
             UPDATE {local}
-            SET local_modified = ?
+            SET local_modified = ?,
                 httpRealm = ?,
                 formSubmitURL = ?,
                 usernameField = ?,
@@ -786,7 +786,7 @@ impl UpdatePlan {
                 password = ?,
                 hostname = ?,
                 username = ?,
-                syncStatus = {changed}
+                sync_status = {changed}
             WHERE guid = ?",
             local = schema::LOCAL_TABLE_NAME,
             changed = SyncStatus::Changed as u8);
