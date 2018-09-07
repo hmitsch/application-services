@@ -305,7 +305,7 @@ impl LoginDb {
             &form_submit_host_port as &ToSql,
         ];
         let mut query = format!("
-            SELECT {common},
+            SELECT {common}
             FROM {local_table}
             WHERE hostname IS ?
               AND httpRealm IS ?
@@ -710,6 +710,7 @@ impl UpdatePlan {
                 httpRealm = ?,
                 formSubmitURL = ?,
                 usernameField = ?,
+                passwordField = ?,
                 timesUsed = coalesce(nullif(?, 0), timesUsed),
                 timeLastUsed = coalesce(nullif(?, 0), timeLastUsed),
                 timePasswordChanged = coalesce(nullif(?, 0), timePasswordChanged),

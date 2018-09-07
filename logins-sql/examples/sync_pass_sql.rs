@@ -15,12 +15,14 @@ extern crate serde_json;
 extern crate rusqlite;
 
 extern crate webbrowser;
+extern crate clap;
 
 #[macro_use]
 extern crate log;
 extern crate env_logger;
 extern crate chrono;
 extern crate failure;
+
 use failure::Fail;
 
 use std::{fs, io::{self, Read, Write}};
@@ -51,22 +53,22 @@ struct ScopedKeyData {
     scope: String,
 }
 
-fn load_fxa_creds() -> Result<FirefoxAccount> {
-    let mut file = fs::File::open("./credentials.json")?;
+fn load_fxa_creds(path: &str) -> Result<FirefoxAccount> {
+    let mut file = fs::File::open(path)?;
     let mut s = String::new();
     file.read_to_string(&mut s)?;
     Ok(FirefoxAccount::from_json(&s)?)
 }
 
-fn load_or_create_fxa_creds(cfg: Config) -> Result<FirefoxAccount> {
-    load_fxa_creds()
+fn load_or_create_fxa_creds(path: &str, cfg: Config) -> Result<FirefoxAccount> {
+    load_fxa_creds(path)
     .or_else(|e| {
-        info!("Failed to load existing FxA credentials from ./credentials.json (error: {}), launching OAuth flow", e);
-        create_fxa_creds(cfg)
+        info!("Failed to load existing FxA credentials from {:?} (error: {}), launching OAuth flow", path, e);
+        create_fxa_creds(path, cfg)
     })
 }
 
-fn create_fxa_creds(cfg: Config) -> Result<FirefoxAccount> {
+fn create_fxa_creds(path: &str, cfg: Config) -> Result<FirefoxAccount> {
     let mut acct = FirefoxAccount::new(cfg, CLIENT_ID, REDIRECT_URI);
     let oauth_uri = acct.begin_oauth_flow(SCOPES, true)?;
 
@@ -82,7 +84,7 @@ fn create_fxa_creds(cfg: Config) -> Result<FirefoxAccount> {
     let query_params = final_url.query_pairs().into_owned().collect::<HashMap<String, String>>();
 
     acct.complete_oauth_flow(&query_params["code"], &query_params["state"])?;
-    let mut file = fs::File::create("./credentials.json")?;
+    let mut file = fs::File::create(path)?;
     write!(file, "{}", acct.to_json()?)?;
     file.flush()?;
     Ok(acct)
@@ -255,9 +257,9 @@ fn show_all(engine: &PasswordEngine) -> Result<Vec<String>> {
         "Pass Field",
 
         "Uses",
-        "createdAt",
-        "changedAt",
-        "lastUsed"
+        "Created At",
+        "Changed At",
+        "Last Used"
     ]);
 
     let mut v = Vec::with_capacity(records.len());
@@ -309,20 +311,59 @@ fn init_logging() {
         env_logger::Env::default().filter_or("RUST_LOG", spec)
     );
 }
+
 fn main() -> Result<()> {
     init_logging();
     std::env::set_var("RUST_BACKTRACE", "1");
+
+    let matches = clap::App::new("sync_pass_sql")
+        .about("CLI login syncing tool (backed by sqlcipher)")
+
+        .arg(clap::Arg::with_name("database_path")
+            .short("d")
+            .long("database")
+            .value_name("LOGINS_DATABASE")
+            .takes_value(true)
+            .help("Path to the logins database (default: \"./logins.db\")"))
+
+        .arg(clap::Arg::with_name("encryption_key")
+            .short("k")
+            .long("key")
+            .value_name("ENCRYPTION_KEY")
+            .takes_value(true)
+            .help("Database encryption key.")
+            .required(true))
+
+        .arg(clap::Arg::with_name("credential_file")
+            .short("c")
+            .long("credentials")
+            .value_name("CREDENTIAL_JSON")
+            .takes_value(true)
+            .help("Path to store our cached fxa credentials (defaults to \"./credentials.json\""))
+
+        .get_matches();
+
+    let cred_file = matches.value_of("credential_file").unwrap_or("./credentials.json");
+    let db_path = matches.value_of("database_path").unwrap_or("./logins.db");
+    // This should already be checked by `clap`, IIUC
+    let encryption_key = matches.value_of("encryption_key").expect("Encryption key is not optional");
+
+    // Lets not log the encryption key, it's just not a good habit to be in.
+    debug!("Using credential file = {:?}, db = {:?}", cred_file, db_path);
+
+    // TODO: allow users to use stage/etc.
     let cfg = Config::import_from(CONTENT_BASE)?;
     let tokenserver_url = cfg.token_server_endpoint_url()?;
 
-    let mut acct = load_or_create_fxa_creds(cfg.clone())?;
+    // TODO: we should probably set a persist callback on acct?
+    let mut acct = load_or_create_fxa_creds(cred_file, cfg.clone())?;
     let token: OAuthInfo;
     match acct.get_oauth_token(SCOPES)? {
         Some(t) => token = t,
         None => {
             // The cached credentials did not have appropriate scope, sign in again.
             warn!("Credentials do not have appropriate scope, launching OAuth flow.");
-            acct = create_fxa_creds(cfg.clone())?;
+            acct = create_fxa_creds(cred_file, cfg.clone())?;
             token = acct.get_oauth_token(SCOPES)?.unwrap();
         }
     }
@@ -338,9 +379,7 @@ fn main() -> Result<()> {
     };
     let root_sync_key = KeyBundle::from_ksync_base64(&key.k)?;
 
-    let mut engine = PasswordEngine::new("./logins.db",
-        Some(&prompt_string("Enter database secret key (if this is the first time, make one up)")
-            .expect("No secret key provided, exiting")))?;
+    let mut engine = PasswordEngine::new(db_path, Some(encryption_key))?;
 
     info!("Engine has {} passwords", engine.list()?.len());
 
