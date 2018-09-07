@@ -164,6 +164,7 @@ pub fn create(db: &db::LoginDb) -> Result<()> {
         &*CREATE_MIRROR_TABLE_SQL,
         &*CREATE_OVERRIDE_HOSTNAME_INDEX_SQL,
         &*CREATE_DELETED_HOSTNAME_INDEX_SQL,
+        &*CREATE_META_TABLE_SQL,
         &*SET_VERSION_SQL,
     ])?;
     Ok(())
@@ -174,6 +175,7 @@ pub fn drop(db: &db::LoginDb) -> Result<()> {
     db.execute_all(&[
         format!("DROP TABLE IF EXISTS {}", MIRROR_TABLE_NAME).as_str(),
         format!("DROP TABLE IF EXISTS {}", LOCAL_TABLE_NAME).as_str(),
+        format!("DROP TABLE IF EXISTS {}", META_TABLE_NAME).as_str(),
         "PRAGMA user_version = 0",
     ])?;
     Ok(())
