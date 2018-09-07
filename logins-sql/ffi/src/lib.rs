@@ -41,7 +41,7 @@ fn logging_init() {
     #[cfg(target_os = "android")]
     {
         android_logger::init_once(
-            android_logger::Filter::default().with_min_level(log::LogLevel::Trace),
+            android_logger::Filter::default().with_min_level(log::Level::Trace),
             Some("libloginsapi_ffi"));
         debug!("Android logging should be hooked up!")
     }
