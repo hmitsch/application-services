@@ -39,6 +39,7 @@ pub mod schema;
 pub mod util;
 pub mod db;
 pub mod engine;
+mod update_plan;
 
 pub use error::*;
 pub use login::*;
