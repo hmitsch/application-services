@@ -123,7 +123,7 @@ pub enum ExternErrorCode {
     // the DB due to invalid key.
 }
 
-/// Represents an error that occurred on the mentat side. Many mentat FFI functions take a
+/// Represents an error that occurred on the rust side. Many rust FFI functions take a
 /// `*mut ExternError` as the last argument. This is an out parameter that indicates an
 /// error that occurred during that function's execution (if any).
 ///
@@ -132,7 +132,7 @@ pub enum ExternErrorCode {
 /// error that occurred.
 ///
 /// Important: This message is allocated on the heap and it is the consumer's responsibility to
-/// free it using `destroy_mentat_string`!
+/// free it!
 ///
 /// While this pattern is not ergonomic in Rust, it offers two main benefits:
 ///

@@ -49,14 +49,14 @@ fn logging_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn sync15_passwords_state_new(
-    mentat_db_path: *const c_char,
+    db_path: *const c_char,
     encryption_key: *const c_char,
     error: *mut ExternError
 ) -> *mut PasswordEngine {
     logging_init();
     trace!("sync15_passwords_state_new");
     with_translated_result(error, || {
-        let path = c_str_to_str(mentat_db_path);
+        let path = c_str_to_str(db_path);
         let key = c_str_to_str(encryption_key);
         let state = PasswordEngine::new(path, Some(key))?;
         Ok(state)
