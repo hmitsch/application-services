@@ -170,6 +170,19 @@ impl LoginDb {
             None => Ok(None),
         }
     }
+
+    pub fn query_row_named<T>(&self, sql: &str, args: &[(&str, &ToSql)], f: impl FnOnce(&Row) -> Result<T>) -> Result<Option<T>> {
+        let mut stmt = self.db.prepare(sql)?;
+        let res = stmt.query_named(args);
+        if let Err(e) = &res {
+            warn!("Error executing query: {}. Query: {}", e, sql);
+        }
+        let mut rows = res?;
+        match rows.next() {
+            Some(result) => Ok(Some(f(&result?)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 // login specific stuff.
@@ -299,28 +312,28 @@ impl LoginDb {
     // for each one if they exist)... I can't think of how to write that query, though.
     fn find_dupe(&self, l: &Login) -> Result<Option<Login>> {
         let form_submit_host_port = l.form_submit_url.as_ref().and_then(|s| util::url_host_port(&s));
-        let args = vec![
-            &l.hostname as &ToSql,
-            &l.http_realm as &ToSql,
-            &l.username as &ToSql,
-            &form_submit_host_port as &ToSql,
+        let args = &[
+            (":hostname", &l.hostname as &ToSql),
+            (":http_realm", &l.http_realm as &ToSql),
+            (":username", &l.username as &ToSql),
+            (":form_submit", &form_submit_host_port as &ToSql),
         ];
         let mut query = format!("
             SELECT {common}
             FROM {local_table}
-            WHERE hostname IS ?
-              AND httpRealm IS ?
-              AND username IS ?",
+            WHERE hostname IS :hostname
+              AND httpRealm IS :http_realm
+              AND username IS :username",
             common = schema::COMMON_COLS,
             local_table = schema::LOCAL_TABLE_NAME,
         );
         if form_submit_host_port.is_some() {
             // Stolen from iOS
-            query += " AND (formSubmitURL = '' OR (instr(formSubmitURL, ?) > 0))";
+            query += " AND (formSubmitURL = '' OR (instr(formSubmitURL, :form_submit) > 0))";
         } else {
-            query += " AND formSubmitURL IS ?"
+            query += " AND formSubmitURL IS :form_submit"
         }
-        Ok(self.query_row(&query, &args, |row| Login::from_row(row))?)
+        Ok(self.query_row_named(&query, args, |row| Login::from_row(row))?)
     }
 
     pub fn get_all(&self) -> Result<Vec<Login>> {
@@ -330,10 +343,10 @@ impl LoginDb {
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Option<Login>> {
-        self.query_row_cached(&GET_BY_GUID_SQL, &[
-            &id as &ToSql,
-            &id as &ToSql,
-        ], Login::from_row)
+        // Probably should be cached...
+        self.query_row_named(&GET_BY_GUID_SQL,
+                             &[(":guid", &id as &ToSql)],
+                             Login::from_row)
     }
 
     pub fn touch(&self, id: &str) -> Result<()> {
@@ -490,9 +503,9 @@ impl LoginDb {
     }
 
     pub fn exists(&self, id: &str) -> Result<bool> {
-        Ok(self.query_row(
+        Ok(self.query_row_named(
             &*ID_EXISTS_SQL,
-            &[&id as &ToSql, &id as &ToSql],
+            &[(":guid", &id as &ToSql)],
             |row| Ok(row.get(0))
         )?.unwrap_or(false))
     }
@@ -505,45 +518,47 @@ impl LoginDb {
         let now_ms = now_us / 1000;
 
         // Directly delete IDs that have not yet been synced to the server
-        self.db.execute(&format!("
+        self.execute_named(&format!("
             DELETE FROM {local}
-            WHERE guid = ?
+            WHERE guid = :guid
               AND sync_status = {status_new}",
             local = schema::LOCAL_TABLE_NAME,
             status_new = SyncStatus::New as u8),
-            &[&id as &ToSql])?;
+            &[(":guid", &id as &ToSql)]
+        )?;
 
         // For IDs that have, mark is_deleted and clear sensitive fields
-        self.db.execute(&format!("
+        self.execute_named(&format!("
             UPDATE {local}
-            SET local_modified = ?,
+            SET local_modified = :now_ms,
                 sync_status = {status_changed},
                 is_deleted = 1,
                 password = '',
                 hostname = '',
                 username = ''
-            WHERE guid = ?",
+            WHERE guid = :guid",
             local = schema::LOCAL_TABLE_NAME,
             status_changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql, &id as &ToSql])?;
+            &[(":now_ms", &now_ms as &ToSql), (":guid", &id as &ToSql)])?;
 
         // Mark the mirror as overridden
-        self.db.execute(&format!("UPDATE {mirror} SET is_overridden = 1 WHERE guid = ?",
-                                 mirror = schema::MIRROR_TABLE_NAME),
-                        &[&now_ms as &ToSql])?;
+        self.execute_named("UPDATE loginsM SET is_overridden = 1 WHERE guid = :guid",
+                              &[(":guid", &id as &ToSql)])?;
 
         // If we don't have a local record for this ID, but do have it in the mirror
         // insert a tombstone.
-        self.db.execute(&format!("
+        self.execute_named(&format!("
             INSERT OR IGNORE INTO {local}
                     (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
-            SELECT   guid, ?,              1,          {changed},   '',       timeCreated, ?,                   '',       ''
+            SELECT   guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_us,                   '',       ''
             FROM {mirror}
-            WHERE  guid = ?",
+            WHERE guid = :guid",
             local = schema::LOCAL_TABLE_NAME,
             mirror = schema::MIRROR_TABLE_NAME,
             changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql, &now_us as &ToSql, &id as &ToSql])?;
+            &[(":now_ms", &now_ms as &ToSql),
+              (":now_us", &now_us as &ToSql),
+              (":guid", &id as &ToSql)])?;
 
         Ok(exists)
     }
@@ -599,10 +614,10 @@ impl LoginDb {
         let now_ms = now_us / 1000;
 
         self.execute(&format!("DELETE FROM loginsL WHERE sync_status = {new}", new = SyncStatus::New as u8))?;
-        self.execute_with_args(
+        self.execute_named(
             &format!("
                 UPDATE loginsL
-                SET local_modified = ?,
+                SET local_modified = :now_ms,
                     sync_status = {changed},
                     is_deleted = 1,
                     password = '',
@@ -610,18 +625,19 @@ impl LoginDb {
                     username = ''
                 WHERE is_deleted = 0",
                 changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql])?;
+            &[(":now_ms", &now_ms as &ToSql)])?;
 
         self.execute("UPDATE loginsM SET is_overridden = 1")?;
 
-        self.execute_with_args(
+        self.execute_named(
             &format!("
                 INSERT OR IGNORE INTO loginsL
                       (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
-                SELECT guid, ?,              1,          {changed},   '',       timeCreated, ?,                   '',       '')
+                SELECT guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_us,             '',       ''
                 FROM loginsM",
                 changed = SyncStatus::Changed as u8),
-            &[&now_ms as &ToSql, &now_us as &ToSql])?;
+            &[(":now_ms", &now_ms as &ToSql),
+              (":now_us", &now_us as &ToSql)])?;
 
         Ok(())
     }
@@ -683,7 +699,6 @@ impl LoginDb {
             synced = SyncStatus::Synced as u8
         ))?;
         let rows = stmt.query_and_then(&[], |row| {
-            // XXX OutgoingChangeset should no longer have timestamp.
             Ok(if row.get::<_, bool>("is_deleted") {
                 Payload::new_tombstone(row.get_checked::<_, String>("guid")?)
             } else {
@@ -792,14 +807,14 @@ lazy_static! {
         SELECT {common_cols}
         FROM {local}
         WHERE is_deleted = 0
-          AND guid = ?
+          AND guid = :guid
 
         UNION ALL
 
         SELECT {common_cols}
         FROM {mirror}
         WHERE is_overridden IS NOT 1
-          AND guid = ?
+          AND guid = :guid
         ORDER BY hostname ASC
 
         LIMIT 1
@@ -812,10 +827,10 @@ lazy_static! {
     static ref ID_EXISTS_SQL: String = format!("
         SELECT EXISTS(
             SELECT 1 FROM {local}
-            WHERE guid = ? AND is_deleted = 0
+            WHERE guid = :guid AND is_deleted = 0
             UNION ALL
             SELECT 1 FROM {mirror}
-            WHERE guid = ? AND is_overridden IS NOT 1
+            WHERE guid = :guid AND is_overridden IS NOT 1
         )",
         local = schema::LOCAL_TABLE_NAME,
         mirror = schema::MIRROR_TABLE_NAME,

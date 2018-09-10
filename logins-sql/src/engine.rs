@@ -7,7 +7,6 @@ use sync::{self, Sync15StorageClient, Sync15StorageClientInit, GlobalState, KeyB
 use db::LoginDb;
 use std::path::Path;
 use serde_json;
-use std::panic;
 
 #[derive(Debug)]
 pub struct SyncInfo {
@@ -148,12 +147,7 @@ impl PasswordEngine {
         self.sync = Some(sync_info);
         Ok(())
     }
-
 }
-
-
-impl panic::UnwindSafe for PasswordEngine {}
-
 
 #[cfg(test)]
 mod test {

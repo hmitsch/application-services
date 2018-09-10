@@ -88,70 +88,108 @@ impl UpdatePlan {
 
     // These aren't batched but probably should be.
     fn perform_mirror_updates(&self, tx: &mut Transaction) -> Result<()> {
-        let sql = format!("
-            UPDATE {mirror}
-            SET server_modified = ?,
-                httpRealm = ?,
-                formSubmitURL = ?,
-                usernameField = ?,
-                passwordField = ?,
-                timesUsed = coalesce(nullif(?, 0), timesUsed),
-                timeLastUsed = coalesce(nullif(?, 0), timeLastUsed),
-                timePasswordChanged = coalesce(nullif(?, 0), timePasswordChanged),
-                timeCreated = coalesce(nullif(?, 0), timeCreated),
-                password = ?,
-                hostname = ?,
-                username = ?
-            WHERE guid = ?
-        ", mirror = schema::MIRROR_TABLE_NAME);
-        let mut stmt = tx.prepare_cached(&sql)?;
+        let sql = "
+            UPDATE loginsM
+            SET server_modified = :server_modified,
+                httpRealm       = :http_realm,
+                formSubmitURL   = :form_submit_url,
+                usernameField   = :username_field,
+                passwordField   = :password_field,
+                password        = :password,
+                hostname        = :hostname,
+                username        = :username,
+                -- Avoid zeroes if the remote has been overwritten by an older client.
+                timesUsed           = coalesce(nullif(:times_used,            0), timesUsed),
+                timeLastUsed        = coalesce(nullif(:time_last_used,        0), timeLastUsed),
+                timePasswordChanged = coalesce(nullif(:time_password_changed, 0), timePasswordChanged),
+                timeCreated         = coalesce(nullif(:time_created,          0), timeCreated)
+            WHERE guid = :guid
+        ";
+        let mut stmt = tx.prepare_cached(sql)?;
         for (login, timestamp) in &self.mirror_updates {
-            stmt.execute(&[
-                timestamp as &ToSql,
-                &login.http_realm as &ToSql,
-                &login.form_submit_url as &ToSql,
-                &login.username_field as &ToSql,
-                &login.password_field as &ToSql,
-                &login.times_used as &ToSql,
-                &login.time_last_used as &ToSql,
-                &login.time_password_changed as &ToSql,
-                &login.time_created as &ToSql,
-                &login.password as &ToSql,
-                &login.hostname as &ToSql,
-                &login.username as &ToSql,
-                &login.id.as_str() as &ToSql,
+            trace!("Updating mirror {:?}", login.guid_str());
+            stmt.execute_named(&[
+               (":server_modified", timestamp as &ToSql),
+               (":http_realm",      &login.http_realm as &ToSql),
+               (":form_submit_url", &login.form_submit_url as &ToSql),
+               (":username_field",  &login.username_field as &ToSql),
+               (":password_field",  &login.password_field as &ToSql),
+               (":password",        &login.password as &ToSql),
+               (":hostname",        &login.hostname as &ToSql),
+               (":username",        &login.username as &ToSql),
+
+               (":times_used",            &login.times_used as &ToSql),
+               (":time_last_used",        &login.time_last_used as &ToSql),
+               (":time_password_changed", &login.time_password_changed as &ToSql),
+               (":time_created",          &login.time_created as &ToSql),
+
+               (":guid", &login.guid_str() as &ToSql),
             ])?;
         }
         Ok(())
     }
 
     fn perform_mirror_inserts(&self, tx: &mut Transaction) -> Result<()> {
-        let sql = format!("
-            INSERT OR IGNORE INTO {mirror} (
-                is_overridden, server_modified,
-                httpRealm, formSubmitURL, usernameField,
-                passwordField, timesUsed, timeLastUsed, timePasswordChanged, timeCreated,
-                password, hostname, username, guid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            mirror = schema::MIRROR_TABLE_NAME);
+        let sql = "
+            INSERT OR IGNORE INTO loginsM (
+                is_overridden,
+                server_modified,
+
+                httpRealm,
+                formSubmitURL,
+                usernameField,
+                passwordField,
+                password,
+                hostname,
+                username,
+
+                timesUsed,
+                timeLastUsed,
+                timePasswordChanged,
+                timeCreated,
+
+                guid
+            ) VALUES (
+                :is_overridden,
+                :server_modified,
+
+                :http_realm,
+                :form_submit_url,
+                :username_field,
+                :password_field,
+                :password,
+                :hostname,
+                :username,
+
+                :times_used,
+                :time_last_used,
+                :time_password_changed,
+                :time_created,
+
+                :guid
+            )";
         let mut stmt = tx.prepare_cached(&sql)?;
 
         for (login, timestamp, is_overridden) in &self.mirror_inserts {
-            stmt.execute(&[
-                is_overridden as &ToSql,
-                timestamp as &ToSql,
-                &login.http_realm as &ToSql,
-                &login.form_submit_url as &ToSql,
-                &login.username_field as &ToSql,
-                &login.password_field as &ToSql,
-                &login.times_used as &ToSql,
-                &login.time_last_used as &ToSql,
-                &login.time_password_changed as &ToSql,
-                &login.time_created as &ToSql,
-                &login.password as &ToSql,
-                &login.hostname as &ToSql,
-                &login.username as &ToSql,
-                &login.id.as_str() as &ToSql,
+            trace!("Inserting mirror {:?}", login.guid_str());
+            stmt.execute_named(&[
+                (":is_overridden", is_overridden as &ToSql),
+                (":server_modified", timestamp as &ToSql),
+
+                (":http_realm",      &login.http_realm as &ToSql),
+                (":form_submit_url", &login.form_submit_url as &ToSql),
+                (":username_field",  &login.username_field as &ToSql),
+                (":password_field",  &login.password_field as &ToSql),
+                (":password",        &login.password as &ToSql),
+                (":hostname",        &login.hostname as &ToSql),
+                (":username",        &login.username as &ToSql),
+
+                (":times_used",            &login.times_used as &ToSql),
+                (":time_last_used",        &login.time_last_used as &ToSql),
+                (":time_password_changed", &login.time_password_changed as &ToSql),
+                (":time_created",          &login.time_created as &ToSql),
+
+                (":guid", &login.guid_str() as &ToSql),
             ])?;
         }
         Ok(())
@@ -159,39 +197,42 @@ impl UpdatePlan {
 
     fn perform_local_updates(&self, tx: &mut Transaction) -> Result<()> {
         let sql = format!("
-            UPDATE {local}
-            SET local_modified = ?,
-                httpRealm = ?,
-                formSubmitURL = ?,
-                usernameField = ?,
-                passwordField = ?,
-                timeLastUsed = ?,
-                timePasswordChanged = ?,
-                timesUsed = ?,
-                password = ?,
-                hostname = ?,
-                username = ?,
-                sync_status = {changed}
-            WHERE guid = ?",
-            local = schema::LOCAL_TABLE_NAME,
+            UPDATE loginsL
+            SET local_modified      = :local_modified,
+                httpRealm           = :http_realm,
+                formSubmitURL       = :form_submit_url,
+                usernameField       = :username_field,
+                passwordField       = :password_field,
+                timeLastUsed        = :time_last_used,
+                timePasswordChanged = :time_password_changed,
+                timesUsed           = :times_used,
+                password            = :password,
+                hostname            = :hostname,
+                username            = :username,
+                sync_status         = {changed}
+            WHERE guid = :guid",
             changed = SyncStatus::Changed as u8);
         let mut stmt = tx.prepare_cached(&sql)?;
         // XXX OutgoingChangeset should no longer have timestamp.
         let local_ms: i64 = util::system_time_ms_i64(SystemTime::now());
         for l in &self.local_updates {
-            stmt.execute(&[
-                &local_ms as &ToSql,
-                &l.login.http_realm as &ToSql,
-                &l.login.form_submit_url as &ToSql,
-                &l.login.username_field as &ToSql,
-                &l.login.password_field as &ToSql,
-                &l.login.time_last_used as &ToSql,
-                &l.login.time_password_changed as &ToSql,
-                &l.login.times_used as &ToSql,
-                &l.login.password as &ToSql,
-                &l.login.hostname as &ToSql,
-                &l.login.username as &ToSql,
-                &l.guid_str() as &ToSql,
+            trace!("Updating local {:?}", l.guid_str());
+            stmt.execute_named(&[
+                (":local_modified", &local_ms as &ToSql),
+
+                (":http_realm",      &l.login.http_realm as &ToSql),
+                (":form_submit_url", &l.login.form_submit_url as &ToSql),
+                (":username_field",  &l.login.username_field as &ToSql),
+                (":password_field",  &l.login.password_field as &ToSql),
+                (":password",        &l.login.password as &ToSql),
+                (":hostname",        &l.login.hostname as &ToSql),
+                (":username",        &l.login.username as &ToSql),
+
+                (":time_last_used",        &l.login.time_last_used as &ToSql),
+                (":time_password_changed", &l.login.time_password_changed as &ToSql),
+                (":times_used",            &l.login.times_used as &ToSql),
+
+                (":guid", &l.guid_str() as &ToSql),
             ])?;
         }
         Ok(())
