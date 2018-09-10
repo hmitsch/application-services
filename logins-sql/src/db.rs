@@ -702,7 +702,9 @@ impl LoginDb {
             Ok(if row.get::<_, bool>("is_deleted") {
                 Payload::new_tombstone(row.get_checked::<_, String>("guid")?)
             } else {
-                Payload::from_record(Login::from_row(row)?)?
+                let mut login = Login::from_row(row)?;
+                login.fix_outgoing_timestamps();
+                Payload::from_record(login)?
             })
         })?;
         outgoing.changes = rows.collect::<Result<_>>()?;

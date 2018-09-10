@@ -62,6 +62,20 @@ impl Login {
         self.id.as_str()
     }
 
+    pub fn fix_incoming_timestamps(&mut self) {
+        self.time_created          *= 1000;
+        self.time_password_changed *= 1000;
+        self.time_last_used        *= 1000;
+    }
+
+    pub fn fix_outgoing_timestamps(&mut self) {
+        // These are milliseconds remotely, microseconds locally. (Blame
+        // firefox-ios).
+        self.time_created          /= 1000;
+        self.time_password_changed /= 1000;
+        self.time_last_used        /= 1000;
+    }
+
     pub fn check_valid(&self) -> Result<()> {
         if self.hostname.is_empty() {
             throw!(InvalidLogin::EmptyHostname);
@@ -238,8 +252,14 @@ impl SyncLoginData {
     #[inline]
     pub fn from_payload(payload: sync::Payload, ts: ServerTimestamp) -> Result<Self> {
         let guid = payload.id.clone();
-        let login: Option<Login> = if payload.is_tombstone() { None }
-                                   else { Some(payload.into_record()?) };
+        let login: Option<Login> =
+            if payload.is_tombstone() {
+                None
+            } else {
+                let mut record: Login = payload.into_record()?;
+                record.fix_incoming_timestamps();
+                Some(record)
+            };
         Ok(Self { guid, local: None, mirror: None, inbound: (login, ts) })
     }
 }
