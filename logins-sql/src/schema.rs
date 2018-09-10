@@ -40,11 +40,11 @@ const COMMON_SQL: &'static str = "
     usernameField       TEXT,
     passwordField       TEXT,
     timesUsed           INTEGER NOT NULL DEFAULT 0,
-    -- Microseconds
+    -- Milliseconds
     timeCreated         INTEGER NOT NULL,
-    -- Microseconds
+    -- Milliseconds
     timeLastUsed        INTEGER,
-    -- Microseconds
+    -- Milliseconds
     timePasswordChanged INTEGER NOT NULL,
     username            TEXT,
     password            TEXT NOT NULL,
@@ -95,6 +95,22 @@ lazy_static! {
         "CREATE INDEX IF NOT EXISTS {idx_local_deleted_hostname} ON {local} (is_deleted, hostname)",
         idx_local_deleted_hostname = IDX_LOCAL_DELETED_HOSTNAME,
         local = LOCAL_TABLE_NAME
+    );
+
+    static ref UPDATE_LOCAL_TIMESTAMPS_TO_MILLIS_SQL: String = format!(
+        "UPDATE {local}
+         SET timeCreated = timeCreated / 1000,
+             timeLastUsed = timeLastUsed / 1000,
+             timePasswordChanged = timePasswordChanged / 1000",
+        local = LOCAL_TABLE_NAME
+    );
+
+    static ref UPDATE_MIRROR_TIMESTAMPS_TO_MILLIS_SQL: String = format!(
+        "UPDATE {mirror}
+         SET timeCreated = timeCreated / 1000,
+             timeLastUsed = timeLastUsed / 1000,
+             timePasswordChanged = timePasswordChanged / 1000",
+        mirror = MIRROR_TABLE_NAME
     );
 
     static ref SET_VERSION_SQL: String = format!(
@@ -148,9 +164,13 @@ fn upgrade(db: &db::LoginDb, from: i64) -> Result<()> {
         ])?;
     }
     if from < 4 {
-        // The `loginsSyncMeta` table was added in v4
+        // The `loginsSyncMeta` table was added in v4, and we moved
+        // from using microseconds to milliseconds for `timeCreated`,
+        // `timeLastUsed`, and `timePasswordChanged`.
         db.execute_all(&[
             &*CREATE_META_TABLE_SQL,
+            &*UPDATE_LOCAL_TIMESTAMPS_TO_MILLIS_SQL,
+            &*UPDATE_MIRROR_TIMESTAMPS_TO_MILLIS_SQL,
             &*SET_VERSION_SQL,
         ])?;
     }

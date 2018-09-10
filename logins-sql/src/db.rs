@@ -352,19 +352,17 @@ impl LoginDb {
     pub fn touch(&self, id: &str) -> Result<()> {
         self.ensure_local_overlay_exists(id)?;
         self.mark_mirror_overridden(id)?;
-        let now_us = util::system_time_us_i64(SystemTime::now());
-        let now_ms = now_us / 1000;
+        let now_ms = util::system_time_ms_i64(SystemTime::now());
         // As on iOS, just using a record doesn't flip it's status to changed.
         // TODO: this might be wrong for lockbox!
         self.execute_named_cached("
             UPDATE loginsL
-               SET timeLastUsed = :now_micros,
+               SET timeLastUsed = :now_millis,
                    timesUsed = timesUsed + 1,
                    local_modified = :now_millis
                WHERE guid = :guid
                  AND is_deleted = 0",
-            &[(":now_micros", &now_us as &ToSql),
-              (":now_millis", &now_ms as &ToSql),
+            &[(":now_millis", &now_ms as &ToSql),
               (":guid", &id as &ToSql)]
         )?;
         Ok(())
@@ -373,8 +371,7 @@ impl LoginDb {
     pub fn add(&self, mut login: Login) -> Result<Login> {
         login.check_valid()?;
 
-        let now_us = util::system_time_us_i64(SystemTime::now());
-        let now_ms = now_us / 1000;
+        let now_ms = util::system_time_ms_i64(SystemTime::now());
 
         // Allow an empty GUID to be passed to indicate that we should generate
         // one. (Note that the FFI, does not require that the `id` field be
@@ -391,9 +388,9 @@ impl LoginDb {
 
         // Fill in default metadata.
         // TODO: allow this to be provided for testing?
-        login.time_created = now_us;
-        login.time_password_changed = now_us;
-        login.time_last_used = now_us;
+        login.time_created = now_ms;
+        login.time_password_changed = now_ms;
+        login.time_last_used = now_ms;
         login.times_used = 1;
 
         let sql = format!("
@@ -460,18 +457,17 @@ impl LoginDb {
         self.ensure_local_overlay_exists(login.guid_str())?;
         self.mark_mirror_overridden(login.guid_str())?;
 
-        let now_us = util::system_time_us_i64(SystemTime::now());
-        let now_ms = now_us / 1000;
+        let now_ms = util::system_time_ms_i64(SystemTime::now());
 
         let sql = format!("
             UPDATE loginsL
             SET local_modified      = :now_millis,
-                timeLastUsed        = :now_micros,
+                timeLastUsed        = :now_millis,
                 -- Only update timePasswordChanged if, well, the password changed.
                 timePasswordChanged = (CASE
                     WHEN password = :password
                     THEN timePasswordChanged
-                    ELSE :now_micros
+                    ELSE :now_millis
                 END),
                 httpRealm           = :http_realm,
                 formSubmitURL       = :form_submit_url,
@@ -496,7 +492,6 @@ impl LoginDb {
             (":username_field", &login.username_field as &ToSql),
             (":password_field", &login.password_field as &ToSql),
             (":guid", &login.id as &ToSql),
-            (":now_micros", &now_us as &ToSql),
             (":now_millis", &now_ms as &ToSql),
         ])?;
         Ok(())
@@ -514,8 +509,7 @@ impl LoginDb {
     /// existed already.
     pub fn delete(&self, id: &str) -> Result<bool> {
         let exists = self.exists(id)?;
-        let now_us = util::system_time_us_i64(SystemTime::now());
-        let now_ms = now_us / 1000;
+        let now_ms = util::system_time_ms_i64(SystemTime::now());
 
         // Directly delete IDs that have not yet been synced to the server
         self.execute_named(&format!("
@@ -550,14 +544,13 @@ impl LoginDb {
         self.execute_named(&format!("
             INSERT OR IGNORE INTO {local}
                     (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
-            SELECT   guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_us,                   '',       ''
+            SELECT   guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_ms,                   '',       ''
             FROM {mirror}
             WHERE guid = :guid",
             local = schema::LOCAL_TABLE_NAME,
             mirror = schema::MIRROR_TABLE_NAME,
             changed = SyncStatus::Changed as u8),
             &[(":now_ms", &now_ms as &ToSql),
-              (":now_us", &now_us as &ToSql),
               (":guid", &id as &ToSql)])?;
 
         Ok(exists)
@@ -610,8 +603,7 @@ impl LoginDb {
 
     pub fn wipe(&self) -> Result<()> {
         info!("Executing reset on password store!");
-        let now_us = util::system_time_us_i64(SystemTime::now());
-        let now_ms = now_us / 1000;
+        let now_ms = util::system_time_ms_i64(SystemTime::now());
 
         self.execute(&format!("DELETE FROM loginsL WHERE sync_status = {new}", new = SyncStatus::New as u8))?;
         self.execute_named(
@@ -633,11 +625,10 @@ impl LoginDb {
             &format!("
                 INSERT OR IGNORE INTO loginsL
                       (guid, local_modified, is_deleted, sync_status, hostname, timeCreated, timePasswordChanged, password, username)
-                SELECT guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_us,             '',       ''
+                SELECT guid, :now_ms,        1,          {changed},   '',       timeCreated, :now_ms,             '',       ''
                 FROM loginsM",
                 changed = SyncStatus::Changed as u8),
-            &[(":now_ms", &now_ms as &ToSql),
-              (":now_us", &now_us as &ToSql)])?;
+            &[(":now_ms", &now_ms as &ToSql)])?;
 
         Ok(())
     }
@@ -702,8 +693,7 @@ impl LoginDb {
             Ok(if row.get::<_, bool>("is_deleted") {
                 Payload::new_tombstone(row.get_checked::<_, String>("guid")?)
             } else {
-                let mut login = Login::from_row(row)?;
-                login.fix_outgoing_timestamps();
+                let login = Login::from_row(row)?;
                 Payload::from_record(login)?
             })
         })?;

@@ -171,7 +171,7 @@ mod test {
         let engine = PasswordEngine::new_in_memory(Some("secret")).unwrap();
         let list = engine.list().expect("Grabbing Empty list to work");
         assert_eq!(list.len(), 0);
-        let start_us = util::system_time_us_i64(SystemTime::now());
+        let start_us = util::system_time_ms_i64(SystemTime::now());
 
         let a = Login {
             id: "aaaaaaaaaaaa".into(),
@@ -207,9 +207,9 @@ mod test {
             .expect("a to exist");
 
         assert_logins_equiv(&a, &a_from_db);
-        assert_gt!(a_from_db.time_created, start_us);
-        assert_gt!(a_from_db.time_password_changed, start_us);
-        assert_gt!(a_from_db.time_last_used, start_us);
+        assert_ge!(a_from_db.time_created, start_us);
+        assert_ge!(a_from_db.time_password_changed, start_us);
+        assert_ge!(a_from_db.time_last_used, start_us);
         assert_eq!(a_from_db.times_used, 1);
 
         let b_from_db = engine.get(&b_id)
@@ -220,9 +220,9 @@ mod test {
             id: b_id.clone(),
             .. b.clone()
         });
-        assert_gt!(b_from_db.time_created, start_us);
-        assert_gt!(b_from_db.time_password_changed, start_us);
-        assert_gt!(b_from_db.time_last_used, start_us);
+        assert_ge!(b_from_db.time_created, start_us);
+        assert_ge!(b_from_db.time_password_changed, start_us);
+        assert_ge!(b_from_db.time_last_used, start_us);
         assert_eq!(b_from_db.times_used, 1);
 
         let mut list = engine.list().expect("Grabbing list to work");
@@ -242,7 +242,7 @@ mod test {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0], b_from_db);
 
-        let now_us = util::system_time_us_i64(SystemTime::now());
+        let now_us = util::system_time_ms_i64(SystemTime::now());
         let b2 = Login { password: "newpass".into(), id: b_id.clone(), .. b.clone() };
 
         engine.update(b2.clone()).expect("update b should work");
@@ -252,10 +252,10 @@ mod test {
             .expect("b to exist");
 
         assert_logins_equiv(&b_after_update, &b2);
-        assert_gt!(b_after_update.time_created, start_us);
-        assert_lt!(b_after_update.time_created, now_us);
-        assert_gt!(b_after_update.time_password_changed, now_us);
-        assert_gt!(b_after_update.time_last_used, now_us);
+        assert_ge!(b_after_update.time_created, start_us);
+        assert_le!(b_after_update.time_created, now_us);
+        assert_ge!(b_after_update.time_password_changed, now_us);
+        assert_ge!(b_after_update.time_last_used, now_us);
         // Should be two even though we updated twice
         assert_eq!(b_after_update.times_used, 2);
     }
