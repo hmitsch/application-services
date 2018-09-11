@@ -126,6 +126,7 @@ pub enum ExternErrorCode {
 
     // TODO: lockbox indicated that they would want to know when we fail to open
     // the DB due to invalid key.
+    // https://github.com/mozilla/application-services/issues/231
 }
 
 /// Represents an error that occurred on the rust side. Many rust FFI functions take a
