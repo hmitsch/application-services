@@ -12,7 +12,6 @@ use logins_sql::{
     ErrorKind,
 };
 
-use reqwest::StatusCode;
 use sync15_adapter::{
     ErrorKind as Sync15ErrorKind
 };
@@ -170,7 +169,7 @@ fn get_code(err: &Error) -> ExternErrorCode {
         ErrorKind::SyncAdapterError(e) => {
             error!("Sync error {:?}", e);
             match e.kind() {
-                Sync15ErrorKind::TokenserverHttpError(StatusCode::Unauthorized) => {
+                Sync15ErrorKind::TokenserverHttpError(401) => {
                     ExternErrorCode::AuthInvalidError
                 }
                 _ => ExternErrorCode::OtherError,

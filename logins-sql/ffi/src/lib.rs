@@ -7,7 +7,6 @@ extern crate rusqlite;
 extern crate logins_sql;
 extern crate sync15_adapter;
 extern crate url;
-extern crate reqwest;
 #[macro_use] extern crate log;
 
 #[cfg(target_os = "android")]
