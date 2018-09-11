@@ -81,7 +81,7 @@ impl Login {
         Ok(())
     }
 
-    pub fn from_row(row: &Row) -> Result<Login> {
+    pub(crate) fn from_row(row: &Row) -> Result<Login> {
         Ok(Login {
             id: row.get_checked("guid")?,
             password: row.get_checked("password")?,
@@ -117,7 +117,7 @@ impl MirrorLogin {
         self.login.guid_str()
     }
 
-    pub fn from_row(row: &Row) -> Result<MirrorLogin> {
+    pub(crate) fn from_row(row: &Row) -> Result<MirrorLogin> {
         Ok(MirrorLogin {
             login: Login::from_row(row)?,
             is_overridden: row.get_checked("is_overridden")?,
@@ -162,7 +162,7 @@ impl LocalLogin {
         self.login.guid_str()
     }
 
-    pub fn from_row(row: &Row) -> Result<LocalLogin> {
+    pub(crate) fn from_row(row: &Row) -> Result<LocalLogin> {
         Ok(LocalLogin {
             login: Login::from_row(row)?,
             sync_status: SyncStatus::from_u8(row.get_checked("sync_status")?)?,
