@@ -18,6 +18,7 @@ extern crate failure;
 #[macro_use]
 extern crate failure_derive;
 
+#[cfg(test)]
 #[macro_use]
 extern crate more_asserts;
 

@@ -290,7 +290,7 @@ impl LoginDb {
             let rows = stmt.query_and_then(chunk, |row| {
                 let guid_idx_i = row.get::<_, i64>("guid_idx");
                 // Hitting this means our math is wrong...
-                assert_ge!(guid_idx_i, 0);
+                assert!(guid_idx_i >= 0);
 
                 let guid_idx = guid_idx_i as usize;
                 let is_mirror: bool = row.get("is_mirror");
