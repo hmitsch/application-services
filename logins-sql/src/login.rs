@@ -402,6 +402,15 @@ impl Login {
             delta.username_field = Some(self.username_field.clone());
         }
 
+        // We discard zero (and negative numbers) for timestamps so that a
+        // record that doesn't contain this information (these are
+        // `#[serde(default)]`) doesn't skew our records.
+        //
+        // Arguably, we should also also ignore values later than our
+        // `time_created`, or earlier than our `time_last_used` or
+        // `time_password_changed`. Doing this properly would probably require
+        // a scheme analogous to Desktop's weak-reupload system, so I'm punting
+        // on it for now.
         if self.time_created > 0 && self.time_created != older.time_created {
             delta.time_created = Some(self.time_created);
         }
@@ -419,7 +428,3 @@ impl Login {
         delta
     }
 }
-
-
-
-

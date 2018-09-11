@@ -21,6 +21,11 @@ fn string_to_c_char(r_string: String) -> *mut c_char {
     CString::new(r_string).unwrap().into_raw()
 }
 
+// "Translate" in the next few functions refers to translating a rust Result
+// type into a `(error, value)` tuple (well, sort of -- the `error` is taken as
+// an out parameter and the value is all that's returned, but it's a conceptual
+// tuple).
+
 pub unsafe fn with_translated_result<F, T>(error: *mut ExternError, callback: F) -> *mut T
 where F: FnOnce() -> Result<T> {
     match try_call_with_result(error, callback) {
@@ -105,12 +110,13 @@ where F: FnOnce() -> Result<R> {
 #[repr(i32)]
 #[derive(Clone, Copy, Debug)]
 pub enum ExternErrorCode {
-    /// The rust code hit a `panic!` (or something equivalent, like `assert!`).
-    UnexpectedPanic = -2,
 
     /// An unexpected error occurred which likely cannot be meaningfully handled
-    /// by the application. For example, network errors and the like are here.
-    OtherError = -1,
+    /// by the application.
+    OtherError = -2,
+
+    /// The rust code hit a `panic!` (or something equivalent, like `assert!`).
+    UnexpectedPanic = -1,
 
     /// No error occcurred.
     NoError = 0,
@@ -143,7 +149,8 @@ pub enum ExternErrorCode {
 #[derive(Debug)]
 pub struct ExternError {
 
-    /// A string message, primarially intended for debugging.
+    /// A string message, primarially intended for debugging. This will be null
+    /// in the case that no error occurred.
     pub message: *mut c_char,
 
     /// Error code.
@@ -151,8 +158,6 @@ pub struct ExternError {
     /// - A negative error code indicates an error which is not expected to be
     ///   handled by the application.
     pub code: ExternErrorCode,
-
-    // TODO: We probably want an extra (json?) property for misc. metadata.
 }
 
 impl Default for ExternError {

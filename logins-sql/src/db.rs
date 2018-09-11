@@ -771,17 +771,17 @@ lazy_static! {
         )",
         mirror = schema::MIRROR_TABLE_NAME,
         local = schema::LOCAL_TABLE_NAME,
-        new = SyncStatus::New as u8
+        new = SyncStatus::New as u8,
     );
 
     static ref META_GET_SQL: String = format!(
         "SELECT value FROM {meta_table} WHERE key = ?",
-        meta_table = schema::META_TABLE_NAME
+        meta_table = schema::META_TABLE_NAME,
     );
 
     static ref META_PUT_SQL: String = format!(
         "REPLACE INTO {meta_table} (key, value) VALUES (?, ?)",
-        meta_table = schema::META_TABLE_NAME
+        meta_table = schema::META_TABLE_NAME,
     );
 
     static ref GET_ALL_SQL: String = format!("
@@ -791,10 +791,9 @@ lazy_static! {
     ",
         common_cols = schema::COMMON_COLS,
         local = schema::LOCAL_TABLE_NAME,
-        mirror = schema::MIRROR_TABLE_NAME
+        mirror = schema::MIRROR_TABLE_NAME,
     );
 
-    // Note: takes two positional args
     static ref GET_BY_GUID_SQL: String = format!("
         SELECT {common_cols}
         FROM {local}
@@ -813,7 +812,7 @@ lazy_static! {
     ",
         common_cols = schema::COMMON_COLS,
         local = schema::LOCAL_TABLE_NAME,
-        mirror = schema::MIRROR_TABLE_NAME
+        mirror = schema::MIRROR_TABLE_NAME,
     );
 
     static ref ID_EXISTS_SQL: String = format!("
@@ -839,6 +838,6 @@ lazy_static! {
 
     static ref CLONE_SINGLE_MIRROR_SQL: String = format!(
         "{} WHERE guid = ?",
-        &*CLONE_ENTIRE_MIRROR_SQL
+        &*CLONE_ENTIRE_MIRROR_SQL,
     );
 }

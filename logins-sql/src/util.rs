@@ -8,6 +8,8 @@ use std::{fmt, time};
 use db::MAX_VARIABLE_NUMBER;
 use url::Url;
 
+// `mapped` basically just refers to the translating of `T` to `&dyn ToSql`
+// using the `to_sql` function. It's annoying that this is needed.
 pub fn each_chunk_mapped<'a, T: 'a>(
     items: &'a [T],
     to_sql: impl Fn(&'a T) -> &'a ToSql,
